@@ -286,6 +286,7 @@ async def test_missing_cloud_data_preserves_previous_values(
     hass,
     make_device,
     load_miot_spec,
+    caplog,
     response,
 ):
     device = power_device(make_device, load_miot_spec, response)
@@ -300,6 +301,7 @@ async def test_missing_cloud_data_preserves_previous_values(
     assert device.props["power_cost_today"] == 17.5
     assert device.props["power_cost_month"] == 320
     device.dispatch.assert_not_called()
+    assert "'result' is undefined" not in caplog.text
 
 
 async def test_incomplete_month_does_not_replace_newer_values(
