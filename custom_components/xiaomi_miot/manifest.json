@@ -1,7 +1,7 @@
 {
   "domain": "xiaomi_miot",
   "name": "Xiaomi Miot",
-  "after_dependencies": ["homekit"],
+  "after_dependencies": ["homekit", "recorder"],
   "codeowners": ["@al-one"],
   "config_flow": true,
   "dependencies": [
