@@ -2,6 +2,7 @@
 import logging
 import time
 import json
+import re
 from typing import cast
 from datetime import datetime, timedelta
 from functools import cmp_to_key, cached_property
@@ -34,6 +35,7 @@ from .core.miot_spec import (
     MiotService,
 )
 from .core.utils import local_zone, get_translation
+from .core.statistics_repair import async_schedule_power_statistics_repair
 
 _LOGGER = logging.getLogger(__name__)
 DATA_KEY = f'{ENTITY_DOMAIN}.{DOMAIN}'
@@ -129,6 +131,20 @@ class SensorEntity(XEntity, BaseEntity, RestoreEntity):
 
     def get_state(self) -> dict:
         return {self.attr: self._attr_native_value}
+
+    async def async_added_to_hass(self):
+        await super().async_added_to_hass()
+        if (
+            self.state_class == SensorStateClass.TOTAL_INCREASING
+            and re.fullmatch(r'power_cost_(today|month)(?:_\d+)?', self.attr)
+        ):
+            period = 'day' if self.attr.startswith('power_cost_today') else 'month'
+            async_schedule_power_statistics_repair(
+                self.hass,
+                self.entity_id,
+                period,
+                self.unit_of_measurement,
+            )
 
     def set_state(self, data: dict):
         value = self.conv.value_from_dict(data)
