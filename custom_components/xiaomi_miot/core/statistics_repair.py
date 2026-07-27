@@ -12,6 +12,13 @@ from homeassistant.components.recorder.statistics import (
     StatisticsRow,
     statistics_during_period,
 )
+from homeassistant.components.recorder.db_schema import (
+    States,
+    Statistics,
+    StatisticsShortTerm,
+)
+from homeassistant.components.recorder.tasks import RecorderTask
+from homeassistant.components.recorder.util import session_scope
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.recorder import DATA_INSTANCE, get_instance
 from homeassistant.helpers.start import async_at_started
@@ -22,7 +29,7 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-REPAIR_VERSION = 1
+REPAIR_VERSION = 2
 STORAGE_KEY = f"{DOMAIN}.power_statistics_repair"
 
 DATA_PENDING = "_power_statistics_repair_pending"
@@ -38,6 +45,14 @@ class PowerStatisticsAdjustment:
 
     start: datetime
     amount: float
+
+
+@dataclass(frozen=True, slots=True)
+class PowerStatisticsPointRepair:
+    """A false zero point and its replacement value."""
+
+    key: int
+    replacement: float | str
 
 
 def _as_finite_non_negative(value) -> float | None:
@@ -61,11 +76,77 @@ def _period_id(timestamp: float, period: PowerStatisticsPeriod, zone: tzinfo) ->
     return local.strftime("%Y-%m")
 
 
-def _matches_false_zero_reset(excess: float, before: float, after: float) -> bool:
-    """Return whether excess growth matches a reset through zero."""
-    reset_growth = min(before, after)
-    tolerance = max(0.002, reset_growth * 0.002)
-    return reset_growth > tolerance and abs(excess - reset_growth) <= tolerance
+def _growth_tolerance(*values: float) -> float:
+    """Return a tolerance for statistics rounding differences."""
+    return max(0.002, max((abs(value) for value in values), default=0) * 0.002)
+
+
+def find_false_zero_point_repairs(
+    rows: list[dict],
+    period: PowerStatisticsPeriod,
+    zone: tzinfo,
+    *,
+    period_offset: float = 0,
+    max_gap: float | None = None,
+) -> list[PowerStatisticsPointRepair]:
+    """Find zero points bounded by valid values in one local period."""
+    repairs: list[PowerStatisticsPointRepair] = []
+    anchor = None
+    zeroes = []
+    previous_timestamp = None
+
+    for row in rows:
+        key = row.get("id")
+        timestamp = _as_finite_non_negative(row.get("timestamp"))
+        value = _as_finite_non_negative(row.get("state"))
+        if key is None or timestamp is None or value is None:
+            anchor = None
+            zeroes = []
+            previous_timestamp = None
+            continue
+
+        point_period = _period_id(timestamp + period_offset, period, zone)
+        if (
+            previous_timestamp is not None
+            and (
+                timestamp <= previous_timestamp
+                or (
+                    max_gap is not None
+                    and timestamp - previous_timestamp > max_gap
+                )
+            )
+        ):
+            anchor = None
+            zeroes = []
+        previous_timestamp = timestamp
+
+        if value == 0:
+            if anchor is not None and point_period == anchor["period"]:
+                zeroes.append((key, point_period))
+            else:
+                zeroes = []
+            continue
+
+        if (
+            anchor is not None
+            and zeroes
+            and point_period == anchor["period"]
+            and all(zero_period == point_period for _, zero_period in zeroes)
+            and value >= anchor["value"]
+        ):
+            repairs.extend(
+                PowerStatisticsPointRepair(key, anchor["raw_value"])
+                for key, _zero_period in zeroes
+            )
+
+        anchor = {
+            "period": point_period,
+            "raw_value": row.get("state"),
+            "value": value,
+        }
+        zeroes = []
+
+    return repairs
 
 
 def find_false_zero_adjustments(
@@ -124,14 +205,13 @@ def find_false_zero_adjustments(
                     0,
                 )
                 excess = actual_growth - expected_growth
-                if (
-                    excess > 0
-                    and _matches_false_zero_reset(
-                        excess,
-                        zero_anchor["state"],
-                        current["state"],
-                    )
-                ):
+                tolerance = _growth_tolerance(
+                    actual_growth,
+                    expected_growth,
+                    zero_anchor["state"],
+                    current["state"],
+                )
+                if excess > tolerance:
                     adjustments.append(
                         PowerStatisticsAdjustment(
                             datetime.fromtimestamp(current["start"], timezone.utc),
@@ -143,15 +223,16 @@ def find_false_zero_adjustments(
         actual_growth = current["sum"] - previous["sum"]
         expected_growth = max(current["state"] - previous["state"], 0)
         excess = actual_growth - expected_growth
+        tolerance = _growth_tolerance(
+            actual_growth,
+            expected_growth,
+            previous["state"],
+            current["state"],
+        )
         if (
             previous["state"] > 0
             and current["state"] > 0
-            and excess > 0
-            and _matches_false_zero_reset(
-                excess,
-                previous["state"],
-                current["state"],
-            )
+            and excess > tolerance
         ):
             adjustments.append(
                 PowerStatisticsAdjustment(
@@ -163,6 +244,165 @@ def find_false_zero_adjustments(
         previous = current
 
     return adjustments
+
+
+def _repair_statistics_state_rows(
+    session,
+    table,
+    metadata_id: int,
+    period: PowerStatisticsPeriod,
+    zone: tzinfo,
+) -> tuple[int, int]:
+    """Repair false zero state values in one statistics table."""
+    db_rows = (
+        session.query(
+            table.id,
+            table.start_ts,
+            table.state,
+            table.mean,
+            table.min,
+            table.max,
+        )
+        .filter(table.metadata_id == metadata_id)
+        .order_by(table.start_ts)
+        .all()
+    )
+    rows = [
+        {
+            "id": row.id,
+            "timestamp": row.start_ts,
+            "state": row.state,
+        }
+        for row in db_rows
+    ]
+    duration = table.duration.total_seconds()
+    repairs = find_false_zero_point_repairs(
+        rows,
+        period,
+        zone,
+        period_offset=duration - 0.000001,
+        max_gap=duration * 1.01,
+    )
+    rows_by_id = {row.id: row for row in db_rows}
+    updated = 0
+    for repair in repairs:
+        db_row = rows_by_id[repair.key]
+        replacement = float(repair.replacement)
+        values = {table.state: replacement}
+        for column_name in ("mean", "min", "max"):
+            old_value = getattr(db_row, column_name)
+            if _as_finite_non_negative(old_value) == 0:
+                values[getattr(table, column_name)] = replacement
+        updated += (
+            session.query(table)
+            .filter(table.id == repair.key)
+            .update(values, synchronize_session=False)
+        )
+    return len(db_rows), updated
+
+
+def _repair_historical_zero_states(
+    instance,
+    entities: dict[str, tuple[PowerStatisticsPeriod, str]],
+    zone: tzinfo,
+) -> dict[str, dict]:
+    """Repair raw and aggregated false zero state values."""
+    result = {}
+    with session_scope(session=instance.get_session()) as session:
+        entity_ids = set(entities)
+        states_metadata = instance.states_meta_manager.get_many(
+            entity_ids,
+            session,
+            True,
+        )
+        statistics_metadata = instance.statistics_meta_manager.get_many(
+            session,
+            entity_ids,
+        )
+
+        for entity_id, (period, _unit) in entities.items():
+            raw_rows = []
+            state_metadata_id = states_metadata.get(entity_id)
+            if state_metadata_id is not None:
+                raw_rows = (
+                    session.query(
+                        States.state_id,
+                        States.last_updated_ts,
+                        States.state,
+                    )
+                    .filter(States.metadata_id == state_metadata_id)
+                    .filter(States.last_updated_ts.is_not(None))
+                    .order_by(States.last_updated_ts)
+                    .all()
+                )
+            raw_points = [
+                {
+                    "id": row.state_id,
+                    "timestamp": row.last_updated_ts,
+                    "state": row.state,
+                }
+                for row in raw_rows
+            ]
+            raw_repairs = find_false_zero_point_repairs(
+                raw_points,
+                period,
+                zone,
+            )
+            raw_updated = 0
+            for repair in raw_repairs:
+                raw_updated += (
+                    session.query(States)
+                    .filter(States.state_id == repair.key)
+                    .update(
+                        {States.state: str(repair.replacement)},
+                        synchronize_session=False,
+                    )
+                )
+
+            statistics_rows = 0
+            statistics_updated = 0
+            if metadata := statistics_metadata.get(entity_id):
+                metadata_id = metadata[0]
+                for table in (Statistics, StatisticsShortTerm):
+                    scanned, updated = _repair_statistics_state_rows(
+                        session,
+                        table,
+                        metadata_id,
+                        period,
+                        zone,
+                    )
+                    statistics_rows += scanned
+                    statistics_updated += updated
+
+            result[entity_id] = {
+                "raw_rows": len(raw_rows),
+                "raw_state_repairs": raw_updated,
+                "statistics_rows": statistics_rows,
+                "statistics_state_repairs": statistics_updated,
+                "verified": (
+                    raw_updated == len(raw_repairs)
+                    and statistics_updated
+                    <= statistics_rows
+                ),
+            }
+    return result
+
+
+@dataclass(slots=True)
+class RepairPowerStatisticsStatesTask(RecorderTask):
+    """Recorder task which repairs historical false zero state points."""
+
+    entities: dict[str, tuple[PowerStatisticsPeriod, str]]
+    zone: tzinfo
+    result: dict[str, dict] | None = None
+
+    def run(self, instance) -> None:
+        """Run the repair in Recorder's serialized task queue."""
+        self.result = _repair_historical_zero_states(
+            instance,
+            self.entities,
+            self.zone,
+        )
 
 
 def _statistics_rows(
@@ -252,6 +492,8 @@ async def async_repair_power_statistics(
             ),
         ]
 
+    state_repair_task = RepairPowerStatisticsStatesTask(pending, zone)
+    recorder.queue_task(state_repair_task)
     for entity_id, adjustments in adjustments_by_entity.items():
         unit = pending[entity_id][1]
         for adjustment in adjustments:
@@ -262,9 +504,9 @@ async def async_repair_power_statistics(
                 unit,
             )
 
-    if any(adjustments_by_entity.values()):
-        await recorder.async_block_till_done()
-        hourly, short_term = await recorder.async_add_executor_job(load_rows)
+    await recorder.async_block_till_done()
+    hourly, short_term = await recorder.async_add_executor_job(load_rows)
+    state_results = state_repair_task.result or {}
 
     now = dt.utcnow().isoformat()
     for entity_id, (period, unit) in pending.items():
@@ -283,24 +525,50 @@ async def async_repair_power_statistics(
             )
             continue
 
+        state_result = state_results.get(entity_id)
+        if (
+            not state_result
+            or not state_result["verified"]
+            or state_result["statistics_rows"] == 0
+        ):
+            _LOGGER.error(
+                "Historical power statistics state repair could not be "
+                "verified for %s",
+                entity_id,
+            )
+            continue
+
         adjustments = adjustments_by_entity[entity_id]
         completed[entity_id] = {
             "completed_at": now,
             "period": period,
             "adjustments": len(adjustments),
+            "raw_state_repairs": state_result["raw_state_repairs"],
+            "statistics_state_repairs": state_result[
+                "statistics_state_repairs"
+            ],
             "total_adjustment": round(
                 sum(adjustment.amount for adjustment in adjustments),
                 6,
             ),
             "unit": unit,
         }
-        if adjustments:
+        repair_count = (
+            len(adjustments)
+            + state_result["raw_state_repairs"]
+            + state_result["statistics_state_repairs"]
+        )
+        if repair_count:
             _LOGGER.warning(
-                "Repaired %s historical false zero reset(s) for %s: %s %s",
-                len(adjustments),
+                "Repaired historical false zero data for %s: "
+                "sum_adjustments=%s (%s %s), raw_states=%s, "
+                "statistics_states=%s",
                 entity_id,
+                len(adjustments),
                 completed[entity_id]["total_adjustment"],
                 unit,
+                state_result["raw_state_repairs"],
+                state_result["statistics_state_repairs"],
             )
 
     await store.async_save(stored)

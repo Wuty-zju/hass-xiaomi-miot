@@ -3,11 +3,22 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
+from homeassistant.components.recorder.db_schema import (
+    Base,
+    States,
+    StatesMeta,
+    StatisticsMeta,
+    StatisticsShortTerm,
+)
 from homeassistant.helpers.recorder import DATA_INSTANCE
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from custom_components.xiaomi_miot.core import statistics_repair
 from custom_components.xiaomi_miot.core.statistics_repair import (
+    _repair_historical_zero_states,
     find_false_zero_adjustments,
+    find_false_zero_point_repairs,
 )
 
 
@@ -34,6 +45,15 @@ def adjustment_values(rows, period="day", zone=timezone.utc):
 def test_detects_false_zero_hidden_inside_statistics_interval():
     start = datetime(2026, 7, 27, 8, tzinfo=timezone.utc)
     rows = statistic_rows(start, [17.5, 17.8], [17.5, 35.3])
+
+    assert adjustment_values(rows) == [
+        (start + timedelta(hours=1), pytest.approx(-17.5)),
+    ]
+
+
+def test_detects_hidden_reset_after_growth_inside_statistics_interval():
+    start = datetime(2026, 7, 27, 8, tzinfo=timezone.utc)
+    rows = statistic_rows(start, [17.0, 18.0], [100, 118.5])
 
     assert adjustment_values(rows) == [
         (start + timedelta(hours=1), pytest.approx(-17.5)),
@@ -135,6 +155,143 @@ def test_detects_multiple_independent_false_resets():
     ]
 
 
+def point_repairs(rows, period="day", zone=timezone.utc, **kwargs):
+    return [
+        (repair.key, repair.replacement)
+        for repair in find_false_zero_point_repairs(
+            rows,
+            period,
+            zone,
+            **kwargs,
+        )
+    ]
+
+
+def test_repairs_raw_zero_points_bounded_in_same_period():
+    start = datetime(2026, 7, 27, 8, tzinfo=timezone.utc).timestamp()
+    rows = [
+        {"id": 1, "timestamp": start, "state": "17.5"},
+        {"id": 2, "timestamp": start + 600, "state": "0"},
+        {"id": 3, "timestamp": start + 1200, "state": "0.0"},
+        {"id": 4, "timestamp": start + 1800, "state": "17.8"},
+    ]
+
+    assert point_repairs(rows) == [(2, "17.5"), (3, "17.5")]
+
+
+def test_does_not_repair_zero_across_period_or_lower_recovery():
+    midnight = datetime(2026, 7, 27, 0, tzinfo=timezone.utc).timestamp()
+    rows = [
+        {"id": 1, "timestamp": midnight - 600, "state": 22.4},
+        {"id": 2, "timestamp": midnight, "state": 0},
+        {"id": 3, "timestamp": midnight + 600, "state": 0.2},
+        {"id": 4, "timestamp": midnight + 1200, "state": 0},
+        {"id": 5, "timestamp": midnight + 1800, "state": 0.1},
+    ]
+
+    assert point_repairs(rows) == []
+
+
+def test_repairs_statistics_zero_using_interval_end_period():
+    midnight = datetime(2026, 7, 27, 0, tzinfo=timezone.utc).timestamp()
+    rows = [
+        {"id": 1, "timestamp": midnight - 600, "state": 22.4},
+        {"id": 2, "timestamp": midnight - 300, "state": 0},
+        {"id": 3, "timestamp": midnight, "state": 0.2},
+        {"id": 4, "timestamp": midnight + 300, "state": 0},
+        {"id": 5, "timestamp": midnight + 600, "state": 0.3},
+    ]
+
+    assert point_repairs(
+        rows,
+        period_offset=300 - 0.000001,
+        max_gap=303,
+    ) == [(4, 0.2)]
+
+
+def test_repairs_raw_and_statistics_zero_rows_in_recorder_database():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    make_session = sessionmaker(bind=engine)
+    session = make_session()
+    session.add(StatesMeta(metadata_id=1, entity_id="sensor.energy_today"))
+    session.add(
+        StatisticsMeta(
+            id=1,
+            statistic_id="sensor.energy_today",
+            source="recorder",
+            unit_of_measurement="kWh",
+            has_sum=True,
+        )
+    )
+    start = datetime(2026, 7, 27, 8, tzinfo=timezone.utc).timestamp()
+    for index, value in enumerate(("17.5", "0", "17.8")):
+        session.add(
+            States(
+                metadata_id=1,
+                state=value,
+                last_updated_ts=start + index * 600,
+            )
+        )
+    for index, value in enumerate((17.5, 0, 17.8)):
+        session.add(
+            StatisticsShortTerm(
+                metadata_id=1,
+                start_ts=start + index * 300,
+                state=value,
+                min=value,
+                sum=100 + index,
+            )
+        )
+    session.commit()
+    session.close()
+
+    class FakeStatesMetadata:
+        def get_many(self, entity_ids, _session, _from_recorder):
+            return dict.fromkeys(entity_ids, 1)
+
+    class FakeStatisticsMetadata:
+        def get_many(self, _session, statistic_ids):
+            return {
+                statistic_id: (1, {})
+                for statistic_id in statistic_ids
+            }
+
+    class FakeInstance:
+        states_meta_manager = FakeStatesMetadata()
+        statistics_meta_manager = FakeStatisticsMetadata()
+
+        def get_session(self):
+            return make_session()
+
+    result = _repair_historical_zero_states(
+        FakeInstance(),
+        {"sensor.energy_today": ("day", "kWh")},
+        timezone.utc,
+    )
+
+    assert result["sensor.energy_today"] == {
+        "raw_rows": 3,
+        "raw_state_repairs": 1,
+        "statistics_rows": 3,
+        "statistics_state_repairs": 1,
+        "verified": True,
+    }
+    session = make_session()
+    assert [
+        state
+        for state, in session.query(States.state).order_by(States.state_id)
+    ] == ["17.5", "17.5", "17.8"]
+    assert [
+        (state, minimum)
+        for state, minimum in session.query(
+            StatisticsShortTerm.state,
+            StatisticsShortTerm.min,
+        ).order_by(StatisticsShortTerm.id)
+    ] == [(17.5, 17.5), (17.5, 17.5), (17.8, 17.8)]
+    session.close()
+
+
 async def test_async_repair_adjusts_and_persists_completion(hass, monkeypatch):
     start = datetime(2026, 7, 27, 8, tzinfo=timezone.utc)
     rows = statistic_rows(start, [17.5, 17.8], [17.5, 35.3])
@@ -161,6 +318,17 @@ async def test_async_repair_adjusts_and_persists_completion(hass, monkeypatch):
 
         async def async_add_executor_job(self, func):
             return func()
+
+        def queue_task(self, task):
+            task.result = {
+                "sensor.energy_today": {
+                    "raw_rows": 3,
+                    "raw_state_repairs": 1,
+                    "statistics_rows": 2,
+                    "statistics_state_repairs": 1,
+                    "verified": True,
+                }
+            }
 
         def async_adjust_statistics(
             self,
@@ -202,6 +370,11 @@ async def test_async_repair_adjusts_and_persists_completion(hass, monkeypatch):
         )
     ]
     assert stored["entities"]["sensor.energy_today"]["adjustments"] == 1
+    assert stored["entities"]["sensor.energy_today"]["raw_state_repairs"] == 1
+    assert (
+        stored["entities"]["sensor.energy_today"]["statistics_state_repairs"]
+        == 1
+    )
     assert stored["entities"]["sensor.energy_today"]["total_adjustment"] == -17.5
 
     await statistics_repair.async_repair_power_statistics(hass, entities)
