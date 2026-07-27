@@ -1,11 +1,13 @@
 import logging
 import copy
+import math
 import re
 from typing import TYPE_CHECKING, Optional, Callable
 from datetime import timedelta
 from functools import cached_property
 from homeassistant.core import HomeAssistant
 from homeassistant.const import CONF_HOST, CONF_TOKEN, CONF_MODEL, CONF_USERNAME, EntityCategory
+from homeassistant.exceptions import TemplateError
 from homeassistant.util import dt
 from homeassistant.components import persistent_notification
 from homeassistant.helpers.event import async_call_later, async_track_time_interval
@@ -1199,11 +1201,41 @@ class Device(CustomConfigHelper):
                 'time_end': now + 60,
                 'limit': int(c.get('limit') or 1),
             }
-            rdt = await self.cloud.async_request_api('v2/user/statistics', pms) or {}
+            rdt = await self.cloud.async_request_api('v2/user/statistics', pms)
+            if c.get('template') == 'micloud_statistics_power_cost':
+                if rdt is None:
+                    self.log.debug('No cloud power statistics response for key: %s', c.get('key'))
+                    rdt = {}
+                elif not isinstance(rdt, dict):
+                    self.log.warning('Invalid cloud power statistics response for key: %s', c.get('key'))
+                    rdt = {}
+                elif rdt.get('code') not in [None, 0]:
+                    self.log.warning(
+                        'Cloud power statistics request failed for key %s: code=%s',
+                        c.get('key'), rdt.get('code'),
+                    )
+                    rdt = {}
+                elif not isinstance(rdt.get('result'), list):
+                    self.log.debug('No cloud power statistics records for key: %s', c.get('key'))
+                    rdt = {}
+            else:
+                rdt = rdt or {}
             self.log.info('Got micloud statistics: %s', rdt)
             if tpl := c.get('template'):
                 tpl = template(tpl, self.hass)
-                rls = tpl.async_render(rdt)
+                try:
+                    rls = tpl.async_render(rdt)
+                except TemplateError:
+                    if c.get('template') != 'micloud_statistics_power_cost':
+                        raise
+                    self.log.warning(
+                        'Unable to parse cloud power statistics for key: %s',
+                        c.get('key'),
+                    )
+                    rls = {
+                        'power_cost_today': None,
+                        'power_cost_month': None,
+                    }
             else:
                 rls = [
                     v.get('value')
@@ -1214,12 +1246,75 @@ class Device(CustomConfigHelper):
                 attrs[anm] = rls
             elif isinstance(rls, dict):
                 update_attrs_with_suffix(attrs, rls)
+        attrs = self._filter_power_cost_statistics(attrs)
         if attrs:
             self.available = True
             self.props.update(attrs)
             self.data['updated'] = dt.now()
             self.dispatch(self.decode_attrs(attrs))
         return attrs
+
+    def _filter_power_cost_statistics(self, attrs: dict, now=None) -> dict:
+        if not isinstance(attrs, dict):
+            return {}
+
+        result = dict(attrs)
+        now = now or dt.now()
+        periods = self.data.setdefault('_power_cost_periods', {})
+        for key in list(result):
+            if re.fullmatch(r'power_cost_today(?:_\d+)?', key):
+                current_period = now.strftime('%Y-%m-%d')
+            elif re.fullmatch(r'power_cost_month(?:_\d+)?', key):
+                current_period = now.strftime('%Y-%m')
+            else:
+                continue
+
+            value = result.get(key)
+            if value is None:
+                self.log.debug('Ignore missing power cost statistic: %s', key)
+                result.pop(key, None)
+                continue
+            if isinstance(value, bool):
+                self.log.warning('Ignore invalid power cost statistic: %s=%s', key, value)
+                result.pop(key, None)
+                continue
+
+            try:
+                new_value = float(value)
+            except (TypeError, ValueError):
+                self.log.warning('Ignore invalid power cost statistic: %s=%s', key, value)
+                result.pop(key, None)
+                continue
+            if not math.isfinite(new_value) or new_value < 0:
+                self.log.warning('Ignore invalid power cost statistic: %s=%s', key, value)
+                result.pop(key, None)
+                continue
+
+            old_raw = self.props.get(key)
+            try:
+                old_value = float(old_raw) if old_raw is not None else None
+            except (TypeError, ValueError):
+                old_value = None
+            if old_value is not None and not math.isfinite(old_value):
+                old_value = None
+
+            previous_period = periods.get(key)
+            if (
+                previous_period == current_period
+                and old_value is not None
+                and new_value < old_value
+            ):
+                self.log.warning(
+                    'Ignore decreasing power cost statistic in the same period: '
+                    '%s: %s -> %s, period=%s',
+                    key, old_raw, value, current_period,
+                )
+                result.pop(key, None)
+                continue
+
+            periods[key] = current_period
+
+        return result
 
     @cached_property
     def miio_cloud_records(self):
