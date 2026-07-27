@@ -1,5 +1,6 @@
 """Support for Xiaomi sensors."""
 import logging
+import math
 import time
 import json
 import re
@@ -35,7 +36,10 @@ from .core.miot_spec import (
     MiotService,
 )
 from .core.utils import local_zone, get_translation
-from .core.statistics_repair import async_schedule_power_statistics_repair
+from .core.statistics_repair import (
+    async_schedule_power_statistics_repair,
+    power_statistics_period,
+)
 
 _LOGGER = logging.getLogger(__name__)
 DATA_KEY = f'{ENTITY_DOMAIN}.{DOMAIN}'
@@ -134,11 +138,39 @@ class SensorEntity(XEntity, BaseEntity, RestoreEntity):
 
     async def async_added_to_hass(self):
         await super().async_added_to_hass()
+        period = power_statistics_period(self.attr)
         if (
-            self.state_class == SensorStateClass.TOTAL_INCREASING
-            and re.fullmatch(r'power_cost_(today|month)(?:_\d+)?', self.attr)
+            period
+            and self.state_class == SensorStateClass.TOTAL_INCREASING
         ):
-            period = 'day' if self.attr.startswith('power_cost_today') else 'month'
+            if restored := await self.async_get_last_state():
+                try:
+                    restored_value = float(restored.state)
+                    if not math.isfinite(restored_value) or restored_value < 0:
+                        raise ValueError
+                    raw_value = restored_value
+                    if ratio := self.custom_value_ratio:
+                        raw_value /= ratio
+                except (TypeError, ValueError):
+                    pass
+                else:
+                    if self.device.restore_power_cost_statistic(
+                        self.attr,
+                        raw_value,
+                        restored.last_updated,
+                    ):
+                        try:
+                            guarded_value = float(
+                                self.device.props.get(
+                                    self.conv.attr,
+                                    raw_value,
+                                )
+                            )
+                            if ratio:
+                                guarded_value *= ratio
+                        except (TypeError, ValueError):
+                            guarded_value = restored_value
+                        self._attr_native_value = round(guarded_value, 3)
             async_schedule_power_statistics_repair(
                 self.hass,
                 self.entity_id,

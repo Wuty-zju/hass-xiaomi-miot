@@ -19,6 +19,7 @@ from custom_components.xiaomi_miot.core.statistics_repair import (
     _repair_historical_zero_states,
     find_false_zero_adjustments,
     find_false_zero_point_repairs,
+    power_statistics_period,
 )
 
 
@@ -33,6 +34,24 @@ def statistic_rows(start, states, sums, interval=timedelta(hours=1)):
             "sum": total,
         })
     return rows
+
+
+@pytest.mark.parametrize(
+    ("attribute", "period"),
+    [
+        ("power_cost_today", "day"),
+        ("sensor.power_cost_today", "day"),
+        ("sensor.power_cost_today_2", "day"),
+        ("power_cost_month", "month"),
+        ("sensor.power_cost_month_3", "month"),
+        ("sensor.other_energy", None),
+    ],
+)
+def test_power_statistics_period_accepts_entity_attribute_names(
+    attribute,
+    period,
+):
+    assert power_statistics_period(attribute) == period
 
 
 def adjustment_values(rows, period="day", zone=timezone.utc):
@@ -94,6 +113,18 @@ def test_ignores_normal_growth_and_small_rounding_differences():
 def test_ignores_legitimate_daily_reset():
     start = datetime(2026, 7, 26, 15, tzinfo=timezone.utc)
     rows = statistic_rows(start, [22.4, 0.2], [100, 100.2])
+
+    assert adjustment_values(rows, zone=ZoneInfo("Asia/Shanghai")) == []
+
+
+def test_ignores_daily_reset_first_observed_after_midnight():
+    start = datetime(2026, 7, 26, 16, tzinfo=timezone.utc)
+    rows = statistic_rows(
+        start,
+        [15.9, 0.1, 0.1, 0.3],
+        [100, 100.1, 100.1, 100.3],
+        interval=timedelta(minutes=5),
+    )
 
     assert adjustment_values(rows, zone=ZoneInfo("Asia/Shanghai")) == []
 

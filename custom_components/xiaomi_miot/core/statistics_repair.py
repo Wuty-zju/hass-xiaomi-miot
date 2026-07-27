@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone, tzinfo
 import logging
 import math
+import re
 from typing import Literal
 
 from homeassistant.components.recorder.statistics import (
@@ -29,7 +30,7 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-REPAIR_VERSION = 2
+REPAIR_VERSION = 3
 STORAGE_KEY = f"{DOMAIN}.power_statistics_repair"
 
 DATA_PENDING = "_power_statistics_repair_pending"
@@ -37,6 +38,20 @@ DATA_TASK = "_power_statistics_repair_task"
 DATA_UNSUB = "_power_statistics_repair_unsub"
 
 PowerStatisticsPeriod = Literal["day", "month"]
+POWER_COST_ATTRIBUTE_PATTERN = re.compile(
+    r"(?:^|\.)(power_cost_(today|month)(?:_\d+)?)$"
+)
+
+
+def power_statistics_period(
+    attribute: str | None,
+) -> PowerStatisticsPeriod | None:
+    """Return the reset period for a cloud power statistic attribute."""
+    if not isinstance(attribute, str):
+        return None
+    if match := POWER_COST_ATTRIBUTE_PATTERN.search(attribute):
+        return "day" if match.group(2) == "today" else "month"
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +94,18 @@ def _period_id(timestamp: float, period: PowerStatisticsPeriod, zone: tzinfo) ->
 def _growth_tolerance(*values: float) -> float:
     """Return a tolerance for statistics rounding differences."""
     return max(0.002, max((abs(value) for value in values), default=0) * 0.002)
+
+
+def _is_near_period_start(
+    timestamp: float,
+    period: PowerStatisticsPeriod,
+    zone: tzinfo,
+) -> bool:
+    """Return whether a point is in the conservative reset window."""
+    local = datetime.fromtimestamp(timestamp, timezone.utc).astimezone(zone)
+    if period == "month" and local.day != 1:
+        return False
+    return local.hour == 0
 
 
 def find_false_zero_point_repairs(
@@ -191,6 +218,10 @@ def find_false_zero_adjustments(
             continue
 
         if current["state"] == 0 and previous["state"] > 0:
+            if _is_near_period_start(current["start"], period, zone):
+                previous = current
+                zero_anchor = None
+                continue
             zero_anchor = zero_anchor or previous
             previous = current
             continue
@@ -222,6 +253,13 @@ def find_false_zero_adjustments(
 
         actual_growth = current["sum"] - previous["sum"]
         expected_growth = max(current["state"] - previous["state"], 0)
+        if (
+            current["state"] < previous["state"]
+            and _is_near_period_start(current["start"], period, zone)
+        ):
+            previous = current
+            zero_anchor = None
+            continue
         excess = actual_growth - expected_growth
         tolerance = _growth_tolerance(
             actual_growth,

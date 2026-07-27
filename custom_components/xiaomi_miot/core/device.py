@@ -1316,6 +1316,59 @@ class Device(CustomConfigHelper):
 
         return result
 
+    def restore_power_cost_statistic(
+        self,
+        key: str,
+        value,
+        restored_at,
+        now=None,
+    ) -> bool:
+        """Seed a power statistic guard from a restored HA entity state."""
+        if not isinstance(key, str):
+            return False
+        match = re.search(
+            r'(?:^|\.)(power_cost_(today|month)(?:_\d+)?)$',
+            key,
+        )
+        if not match:
+            return False
+        key = match.group(1)
+        period_type = match.group(2)
+
+        try:
+            restored_value = float(value)
+        except (TypeError, ValueError):
+            return False
+        if not math.isfinite(restored_value) or restored_value < 0:
+            return False
+
+        now = now or dt.now()
+        try:
+            restored_local = restored_at.astimezone(now.tzinfo)
+        except (AttributeError, TypeError, ValueError):
+            return False
+        period_format = '%Y-%m-%d' if period_type == 'today' else '%Y-%m'
+        current_period = now.strftime(period_format)
+        if restored_local.strftime(period_format) != current_period:
+            return False
+
+        current_raw = self.props.get(key)
+        try:
+            current_value = (
+                float(current_raw)
+                if current_raw is not None
+                else None
+            )
+        except (TypeError, ValueError):
+            current_value = None
+        if current_value is not None and not math.isfinite(current_value):
+            current_value = None
+
+        if current_value is None or restored_value > current_value:
+            self.props[key] = value
+        self.data.setdefault('_power_cost_periods', {})[key] = current_period
+        return True
+
     @cached_property
     def miio_cloud_records(self):
         return self.custom_config_list('miio_cloud_records') or []

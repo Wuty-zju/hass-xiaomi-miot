@@ -145,6 +145,63 @@ def test_daily_value_can_reset_across_local_day(
     )["power_cost_today"] == new_value
 
 
+def test_restored_daily_value_seeds_guard_after_restart(
+    make_device,
+    load_miot_spec,
+):
+    device = power_device(make_device, load_miot_spec, None)
+    device.props["power_cost_today"] = 0
+    now = datetime(2026, 7, 27, 9, 20, tzinfo=ZoneInfo("Asia/Shanghai"))
+    restored_at = datetime(
+        2026,
+        7,
+        27,
+        1,
+        10,
+        tzinfo=ZoneInfo("UTC"),
+    )
+
+    assert device.restore_power_cost_statistic(
+        "sensor.power_cost_today",
+        6.3,
+        restored_at,
+        now,
+    )
+    assert device.props["power_cost_today"] == 6.3
+    assert device.data["_power_cost_periods"]["power_cost_today"] == (
+        "2026-07-27"
+    )
+    assert device._filter_power_cost_statistics(
+        {"power_cost_today": 0},
+        now,
+    ) == {}
+
+
+def test_restored_daily_value_does_not_block_new_day_reset(
+    make_device,
+    load_miot_spec,
+):
+    device = power_device(make_device, load_miot_spec, None)
+    device.props["power_cost_today"] = 0.2
+    now = datetime(2026, 7, 27, 0, 5, tzinfo=ZoneInfo("Asia/Shanghai"))
+    restored_at = datetime(
+        2026,
+        7,
+        26,
+        15,
+        55,
+        tzinfo=ZoneInfo("UTC"),
+    )
+
+    assert not device.restore_power_cost_statistic(
+        "sensor.power_cost_today",
+        22.4,
+        restored_at,
+        now,
+    )
+    assert device.props["power_cost_today"] == 0.2
+
+
 @pytest.mark.parametrize(
     ("new_value", "accepted"),
     [
