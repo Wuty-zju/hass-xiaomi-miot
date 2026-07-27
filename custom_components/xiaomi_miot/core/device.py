@@ -1205,19 +1205,19 @@ class Device(CustomConfigHelper):
             if c.get('template') == 'micloud_statistics_power_cost':
                 if rdt is None:
                     self.log.debug('No cloud power statistics response for key: %s', c.get('key'))
-                    rdt = {}
+                    rdt = {'result': []}
                 elif not isinstance(rdt, dict):
                     self.log.warning('Invalid cloud power statistics response for key: %s', c.get('key'))
-                    rdt = {}
+                    rdt = {'result': []}
                 elif rdt.get('code') not in [None, 0]:
                     self.log.warning(
                         'Cloud power statistics request failed for key %s: code=%s',
                         c.get('key'), rdt.get('code'),
                     )
-                    rdt = {}
+                    rdt = {'result': []}
                 elif not isinstance(rdt.get('result'), list):
                     self.log.debug('No cloud power statistics records for key: %s', c.get('key'))
-                    rdt = {}
+                    rdt = {'result': []}
             else:
                 rdt = rdt or {}
             self.log.info('Got micloud statistics: %s', rdt)
