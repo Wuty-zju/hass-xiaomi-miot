@@ -175,14 +175,28 @@
                 "title": "Configure Xiaomi Miot",
                 "menu_options": {
                     "cloud": "Cloud account and devices",
-                    "gateway": "Authorize local central gateway"
+                    "gateway": "Local gateway for manual scenes"
                 }
             },
             "gateway": {
-                "title": "Authorize local central gateway",
-                "description": "Open [Xiaomi authorization]({oauth_url}) on a device that can reach homeassistant.local:8123. After approval, return here and continue. This creates a separate OAuth grant and certificate for Xiaomi Miot.",
+                "title": "Local gateway for manual scenes",
+                "description": "Off by default. Reuse requires the official Xiaomi Home integration configured for the same account and region. It uses the running local connection without reading its tokens or certificate; this internal interface may change. When enabled, the existing device connection mode controls scene routing: automatic tries local then safely falls back to cloud; local uses only local; cloud uses only cloud.",
                 "data": {
-                    "finish_authorization": "I have completed authorization"
+                    "scene_gateway_mode": "Gateway source"
+                }
+            },
+            "gateway_auth_choice": {
+                "title": "Independent gateway authorization",
+                "description": "This account already has a separate grant. Continue with the existing credentials or authorize again.",
+                "data": {
+                    "gateway_auth_action": "Authorization action"
+                }
+            },
+            "gateway_oauth": {
+                "title": "Authorize an independent local gateway",
+                "description": "Open [Xiaomi authorization]({oauth_url}). If remote access or a reverse proxy cannot reach homeassistant.local:8123, copy the full callback URL from your browser address bar and paste it below. Do not share that URL. Miot stores a separate OAuth grant and gateway certificate.",
+                "data": {
+                    "oauth_callback_url": "Callback URL (leave blank if the callback arrived automatically)"
                 }
             },
             "user": {
@@ -235,6 +249,10 @@
         "error": {
             "gateway_authorization_pending": "Authorization has not reached Home Assistant yet.",
             "gateway_authorization_failed": "Could not authorize the local gateway. Check account and network access.",
+            "gateway_callback_invalid": "Invalid callback URL or authorization state. Copy the complete address again.",
+            "gateway_reuse_not_configured": "Install and configure the official Xiaomi Home integration first.",
+            "gateway_reuse_account_mismatch": "The Xiaomi Home account or region does not match this Miot account.",
+            "gateway_reuse_unavailable": "Xiaomi Home is not loaded or has no selected home available for local control.",
             "cannot_connect": "Failed to connect to the device",
             "cannot_login": "Failed to login to the Xiaomi account. Please check your account credentials. If login attempts fail multiple times, please try logging in again on the Xiaomi official website (mi.com) using the same network environment.",
             "cannot_reach": "Unable to access the Xiaomi API interface",

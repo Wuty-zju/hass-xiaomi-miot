@@ -18,7 +18,7 @@ from . import (
     async_setup_config_entry,
 )
 from .core.templates import template
-from .core.const import CONF_CONN_MODE
+from .core.const import CONF_CONN_MODE, CONF_SCENE_GATEWAY_MODE
 from .core.local_gateway import GatewayResultUnknown, GatewayUnavailable
 from .core.xiaomi_cloud import MiCloudException
 
@@ -119,7 +119,8 @@ class ManualSceneButton(BaseEntity):
 
     async def async_press(self):
         mode = self.entry.get_config(CONF_CONN_MODE) if self.entry else 'cloud'
-        if mode != 'cloud':
+        gateway_mode = self.entry.get_config(CONF_SCENE_GATEWAY_MODE, 'off') if self.entry else 'off'
+        if gateway_mode in ('reuse', 'independent') and mode != 'cloud':
             manager = self.entry.local_gateway if self.entry else None
             try:
                 if not manager:

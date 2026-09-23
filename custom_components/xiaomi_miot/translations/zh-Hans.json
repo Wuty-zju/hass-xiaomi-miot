@@ -118,14 +118,28 @@
                 "title": "配置 Xiaomi Miot",
                 "menu_options": {
                     "cloud": "云端账号和设备",
-                    "gateway": "授权本地中枢网关"
+                    "gateway": "手动场景的本地中枢"
                 }
             },
             "gateway": {
-                "title": "授权本地中枢网关",
-                "description": "请在能访问 homeassistant.local:8123 的设备上打开[小米授权页面]({oauth_url})。完成授权后返回此处继续。此操作会为 Xiaomi Miot 建立独立的 OAuth 授权和中枢证书。",
+                "title": "手动场景的本地中枢",
+                "description": "默认关闭。复用模式要求已安装并配置同一账号、同一区域的官方 Xiaomi Home 集成；使用其运行中的本地连接，不读取令牌或证书。该内部接口可能随官方集成更新而变化。启用后，场景触发仍遵循原有设备连接模式：自动模式本地优先、失败前可回退云端；本地模式只走本地；云端模式只走云端。",
                 "data": {
-                    "finish_authorization": "我已完成授权"
+                    "scene_gateway_mode": "中枢来源"
+                }
+            },
+            "gateway_auth_choice": {
+                "title": "独立中枢授权",
+                "description": "当前账号已有独立授权。可以继续使用现有凭据，或重新获取授权。",
+                "data": {
+                    "gateway_auth_action": "授权操作"
+                }
+            },
+            "gateway_oauth": {
+                "title": "独立授权本地中枢",
+                "description": "打开[小米授权页面]({oauth_url})。若远程访问或反向代理无法访问 homeassistant.local:8123，请复制授权后浏览器地址栏中的完整回调 URL，粘贴在下方；不要把该 URL 分享给他人。此授权会单独保存 Miot 的 OAuth 令牌和中枢证书。",
+                "data": {
+                    "oauth_callback_url": "回调 URL（自动回调成功时留空）"
                 }
             },
             "user": {
@@ -178,6 +192,10 @@
         "error": {
             "gateway_authorization_pending": "Home Assistant 尚未收到授权回调。",
             "gateway_authorization_failed": "本地中枢授权失败，请检查账号与网络。",
+            "gateway_callback_invalid": "回调 URL 或授权状态无效，请重新复制完整地址。",
+            "gateway_reuse_not_configured": "请先安装并配置官方 Xiaomi Home 集成。",
+            "gateway_reuse_account_mismatch": "官方 Xiaomi Home 集成的账号或区域与当前 Miot 账号不一致。",
+            "gateway_reuse_unavailable": "官方 Xiaomi Home 集成尚未加载，或没有选中可用于本地控制的家庭。",
             "cannot_connect": "连接设备失败",
             "cannot_login": "小米账户登录失败，请检查账号密码。如多次尝试仍登录失败，请使用与HA宿主机同一局域网下的其他设备登录小米官网(mi.com)后重试",
             "cannot_reach": "无法访问小米API接口",

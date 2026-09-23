@@ -10,7 +10,7 @@ import json
 import secrets
 import time
 from datetime import datetime, timezone
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode, urlparse
 
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
@@ -33,6 +33,22 @@ def oauth_host(region: str) -> str:
     return 'ha.api.io.mi.com' if region == 'cn' else f'{region}.ha.api.io.mi.com'
 
 
+async def _read_api_response(response, operation: str) -> dict:
+    """Xiaomi may return JSON as text/plain, including for API errors."""
+    if response.status != 200:
+        raise GatewayAuthorizationError(f'{operation} HTTP {response.status}')
+    try:
+        result = json.loads(await response.text())
+    except (ValueError, UnicodeError) as exc:
+        status = response.headers.get('X-Xiaomi-Status-Code')
+        reason = f'Xiaomi status {status}' if status else 'invalid response'
+        raise GatewayAuthorizationError(f'{operation}: {reason}') from exc
+    if not isinstance(result, dict) or result.get('code') != 0:
+        code = result.get('code') if isinstance(result, dict) else None
+        raise GatewayAuthorizationError(f'{operation}: Xiaomi code {code}')
+    return result
+
+
 def authorize_url(client_id: str, redirect_uri: str, device_id: str,
                   state: str | None = None) -> tuple[str, str]:
     """Build an interactive Xiaomi account authorization URL."""
@@ -45,6 +61,19 @@ def authorize_url(client_id: str, redirect_uri: str, device_id: str,
         'state': state,
     })
     return f'https://account.xiaomi.com/oauth2/authorize?{query}', state
+
+
+def callback_authorization_code(url: str, redirect_uri: str, state: str) -> str:
+    """Accept a copied redirect URL when the browser cannot reach HA locally."""
+    parsed = urlparse(url)
+    expected = urlparse(redirect_uri)
+    query = parse_qs(parsed.query)
+    if (parsed.scheme not in ('http', 'https')
+            or parsed.path != expected.path
+            or query.get('state') != [state]
+            or len(query.get('code', [])) != 1):
+        raise GatewayAuthorizationError('gateway callback invalid')
+    return query['code'][0]
 
 
 def generate_certificate_request(uid: str, did: str,
@@ -90,11 +119,9 @@ async def exchange_token(session, region: str, client_id: str,
     async with session.get(url, params={'data': json.dumps(payload)},
                            headers={'content-type': 'application/x-www-form-urlencoded'},
                            timeout=30) as response:
-        if response.status != 200:
-            raise GatewayAuthorizationError('OAuth token request failed')
-        result = await response.json()
+        result = await _read_api_response(response, 'OAuth token request')
     token = result.get('result') if isinstance(result, dict) else None
-    if not isinstance(result, dict) or result.get('code') != 0 or not isinstance(token, dict) or not all(
+    if not isinstance(token, dict) or not all(
         token.get(key) for key in ('access_token', 'refresh_token', 'expires_in')
     ):
         raise GatewayAuthorizationError('OAuth token response invalid')
@@ -114,11 +141,9 @@ async def issue_gateway_certificate(session, region: str, client_id: str,
         url, json={'csr': base64.b64encode(csr.encode()).decode()},
         headers=headers, timeout=30,
     ) as response:
-        if response.status != 200:
-            raise GatewayAuthorizationError('gateway certificate request failed')
-        result = await response.json()
+        result = await _read_api_response(response, 'Gateway certificate request')
     certificate = result.get('result') if isinstance(result, dict) else None
-    if not isinstance(result, dict) or result.get('code') != 0 or not isinstance(certificate, dict):
+    if not isinstance(certificate, dict):
         raise GatewayAuthorizationError('gateway certificate response invalid')
     pem = certificate.get('cert')
     if not isinstance(pem, str) or not pem.startswith('-----BEGIN CERTIFICATE-----'):
@@ -142,12 +167,10 @@ async def oauth_account_uid(session, region: str, client_id: str,
         'plat_form': 0,
         'app_ver': 9,
     }, headers=headers, timeout=30) as response:
-        if response.status != 200:
-            raise GatewayAuthorizationError('OAuth account lookup failed')
-        result = await response.json()
+        result = await _read_api_response(response, 'OAuth account lookup')
     data = result.get('result') if isinstance(result, dict) else None
     homes = data.get('homelist') if isinstance(data, dict) else None
-    if not isinstance(result, dict) or result.get('code') != 0 or not isinstance(homes, list) or not homes:
+    if not isinstance(homes, list) or not homes:
         raise GatewayAuthorizationError('OAuth account has no owned home')
     uid = homes[0].get('uid') if isinstance(homes[0], dict) else None
     if uid is None:

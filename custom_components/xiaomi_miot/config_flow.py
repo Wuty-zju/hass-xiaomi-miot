@@ -50,6 +50,7 @@ from .core.utils import (
     async_analytics_track_event,
 )
 from .core.const import SUPPORTED_DOMAINS, CLOUD_SERVERS, CONF_XIAOMI_CLOUD, HA_VERSION
+from .core.const import CONF_SCENE_GATEWAY_MODE
 from .core.device import MiioInfo
 from .core.miot_spec import MiotSpec
 from .core.mini_miio import AsyncMiIO
@@ -69,6 +70,7 @@ from .core.gateway_auth import (
     OAUTH_CLIENT_ID,
     OAUTH_REDIRECT_ORIGIN,
     authorize_url,
+    callback_authorization_code,
     exchange_token,
     generate_certificate_request,
     issue_gateway_certificate,
@@ -76,6 +78,7 @@ from .core.gateway_auth import (
     validate_gateway_certificate,
 )
 from .core.gateway_manager import gateway_store
+from .core.xiaomi_home_gateway import compatible_gateway
 
 _LOGGER = logging.getLogger(__name__)
 DEFAULT_INTERVAL = 30
@@ -1067,7 +1070,73 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
             self._gateway_webhook_id = None
 
     async def async_step_gateway(self, user_input=None):
-        """Authorize this integration's own gateway MQTT identity."""
+        """Select scene transport without changing device connection settings."""
+        runtime = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id) or {}
+        cloud = runtime.get(CONF_XIAOMI_CLOUD) if isinstance(runtime, dict) else None
+        account_uid = self.saved_config.get('user_id') or getattr(cloud, 'user_id', None)
+        if not account_uid:
+            return self.async_abort(reason='gateway_account_missing')
+        errors = {}
+        if user_input is not None:
+            mode = user_input[CONF_SCENE_GATEWAY_MODE]
+            if mode == 'reuse':
+                _, reason = compatible_gateway(
+                    self.hass, str(account_uid),
+                    self.saved_config.get(CONF_SERVER_COUNTRY, 'cn'),
+                )
+                if reason:
+                    errors['base'] = f'gateway_reuse_{reason}'
+            if not errors:
+                if mode == 'independent':
+                    stored = await gateway_store(
+                        self.hass, self.config_entry.entry_id,
+                    ).async_load() or {}
+                    if (str(stored.get('uid')) == str(account_uid)
+                            and stored.get('region') == self.saved_config.get(CONF_SERVER_COUNTRY, 'cn')
+                            and all(stored.get(key) for key in (
+                                'refresh_token', 'certificate', 'private_key',
+                            ))):
+                        return await self.async_step_gateway_auth_choice()
+                    return await self.async_step_gateway_oauth()
+                return self.async_create_entry(title='', data={
+                    **self.config_entry.options,
+                    CONF_SCENE_GATEWAY_MODE: mode,
+                })
+        return self.async_show_form(
+            step_id='gateway',
+            data_schema=vol.Schema({
+                vol.Required(CONF_SCENE_GATEWAY_MODE, default=self.saved_config.get(
+                    CONF_SCENE_GATEWAY_MODE, 'off',
+                )): vol.In({
+                    'off': '关闭 / Off',
+                    'reuse': '复用 Xiaomi Home / Reuse Xiaomi Home',
+                    'independent': '独立授权 / Independent authorization',
+                }),
+            }),
+            errors=errors,
+        )
+
+    async def async_step_gateway_auth_choice(self, user_input=None):
+        """Allow safe reuse or renewal of Miot's own existing grant."""
+        if user_input is not None:
+            if user_input['gateway_auth_action'] == 'renew':
+                return await self.async_step_gateway_oauth()
+            return self.async_create_entry(title='', data={
+                **self.config_entry.options,
+                CONF_SCENE_GATEWAY_MODE: 'independent',
+            })
+        return self.async_show_form(
+            step_id='gateway_auth_choice',
+            data_schema=vol.Schema({
+                vol.Required('gateway_auth_action', default='existing'): vol.In({
+                    'existing': '使用已有授权 / Use existing authorization',
+                    'renew': '重新授权 / Authorize again',
+                }),
+            }),
+        )
+
+    async def async_step_gateway_oauth(self, user_input=None):
+        """Authorize an independent identity for the local gateway."""
         runtime = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id) or {}
         cloud = runtime.get(CONF_XIAOMI_CLOUD) if isinstance(runtime, dict) else None
         account_uid = self.saved_config.get('user_id') or getattr(cloud, 'user_id', None)
@@ -1097,9 +1166,18 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
 
         errors = {}
         if user_input is not None:
-            if not self._gateway_code:
+            callback_url = user_input.get('oauth_callback_url') or ''
+            if callback_url:
+                try:
+                    self._gateway_code = callback_authorization_code(
+                        callback_url, self._gateway_redirect_uri,
+                        self._gateway_state,
+                    )
+                except GatewayAuthorizationError:
+                    errors['base'] = 'gateway_callback_invalid'
+            if not errors and not self._gateway_code:
                 errors['base'] = 'gateway_authorization_pending'
-            else:
+            if not errors:
                 region = self.saved_config.get(CONF_SERVER_COUNTRY, 'cn')
                 uid = str(account_uid)
                 session = async_get_clientsession(self.hass)
@@ -1136,20 +1214,23 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
                     })
                 except (GatewayAuthorizationError, aiohttp.ClientError,
                         TimeoutError, ValueError, KeyError) as exc:
-                    _LOGGER.warning('Gateway OAuth setup failed: %s', exc)
+                    # aiohttp errors may include the URL and its one-time code.
+                    detail = str(exc) if isinstance(exc, GatewayAuthorizationError) else type(exc).__name__
+                    _LOGGER.warning('Gateway OAuth setup failed: %s', detail)
                     self._gateway_code = None
                     errors['base'] = 'gateway_authorization_failed'
                 else:
                     self._clear_gateway_webhook()
                     return self.async_create_entry(title='', data={
                         **self.config_entry.options,
+                        CONF_SCENE_GATEWAY_MODE: 'independent',
                         'gateway_auth_revision': secrets.token_hex(8),
                     })
 
         return self.async_show_form(
-            step_id='gateway',
+            step_id='gateway_oauth',
             data_schema=vol.Schema({
-                vol.Optional('finish_authorization', default=False): bool,
+                vol.Optional('oauth_callback_url', default=''): str,
             }),
             errors=errors,
             description_placeholders={'oauth_url': self._gateway_url},

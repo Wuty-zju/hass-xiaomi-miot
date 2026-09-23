@@ -23,14 +23,16 @@ SCENE = {
 }
 
 
-def _button(mode, local_result=True):
+def _button(mode, local_result=True, gateway_mode='independent'):
     cloud = SimpleNamespace(
         unique_id='1000-cn-xiaomiio',
         async_run_manual_scene=AsyncMock(return_value=True),
     )
     manager = SimpleNamespace(run_scene=AsyncMock(return_value=local_result))
     entry = SimpleNamespace(
-        get_config=lambda key: mode,
+        get_config=lambda key, default=None: (
+            mode if key == 'conn_mode' else gateway_mode
+        ),
         local_gateway=manager,
     )
     return ManualSceneButton(cloud, SCENE, 'Sleep', entry), cloud, manager
@@ -79,5 +81,15 @@ def test_unknown_local_result_never_retries_in_cloud():
         with pytest.raises(HomeAssistantError, match='result unknown'):
             await button.async_press()
         cloud.async_run_manual_scene.assert_not_awaited()
+
+    asyncio.run(run())
+
+
+def test_gateway_off_uses_cloud_even_for_local_device_mode():
+    async def run():
+        button, cloud, manager = _button('local', gateway_mode='off')
+        await button.async_press()
+        manager.run_scene.assert_not_awaited()
+        cloud.async_run_manual_scene.assert_awaited_once_with(SCENE)
 
     asyncio.run(run())
