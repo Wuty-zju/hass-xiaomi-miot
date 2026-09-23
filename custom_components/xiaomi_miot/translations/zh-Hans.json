@@ -123,7 +123,7 @@
             },
             "gateway_oauth": {
                 "title": "独立授权本地中枢",
-                "description": "打开[小米授权页面]({oauth_url})。小米要求固定回调域名 homeassistant.local:8123，不能直接改成反代域名。若授权后该地址打不开，可将浏览器地址栏中的完整回调 URL 粘贴到下方提交；也可仅将地址开头的 http://homeassistant.local:8123 替换为当前可访问的 Home Assistant 反代地址后打开，保留路径及查询参数不变。回调 URL 含一次性授权码，请勿分享。",
+                "description": "打开[小米授权页面]({oauth_url})。小米要求固定回调域名 homeassistant.local:8123，不能直接改成反代域名。若授权后该地址打不开，可将浏览器地址栏中的完整回调 URL 粘贴到下方提交；也可仅将回调地址开头的协议和主机替换为当前可访问的 Home Assistant 反代地址后打开，保留路径及查询参数不变。回调 URL 含一次性授权码，请勿分享。",
                 "data": {
                     "oauth_callback_url": "回调 URL（自动回调成功时留空）"
                 }

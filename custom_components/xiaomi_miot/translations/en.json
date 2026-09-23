@@ -180,7 +180,7 @@
             },
             "gateway_oauth": {
                 "title": "Authorize an independent local gateway",
-                "description": "Open [Xiaomi authorization]({oauth_url}). Xiaomi requires the fixed callback origin homeassistant.local:8123; do not change the OAuth redirect URI. If the browser cannot reach it after authorization, paste the full callback URL below. Alternatively, replace only the http://homeassistant.local:8123 prefix in the browser address bar with your reachable Home Assistant reverse-proxy origin, keeping the path and query unchanged. The callback URL contains a one-time code; do not share it.",
+                "description": "Open [Xiaomi authorization]({oauth_url}). Xiaomi requires the fixed callback origin homeassistant.local:8123; do not change the OAuth redirect URI. If the browser cannot reach it after authorization, paste the full callback URL below. Alternatively, replace only the protocol and host at the start of the callback address with your reachable Home Assistant reverse-proxy origin, keeping the path and query unchanged. The callback URL contains a one-time code; do not share it.",
                 "data": {
                     "oauth_callback_url": "Callback URL (leave blank if the callback arrived automatically)"
                 }
