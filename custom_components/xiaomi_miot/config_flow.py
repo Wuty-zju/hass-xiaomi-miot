@@ -1063,7 +1063,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
             self._gateway_auth_task = asyncio.create_task(
                 self._async_exchange_gateway_code(query['code'])
             )
-        return web.Response(text='Authorization received. Return to Home Assistant and continue.')
+        return web.Response(text='Callback received. Return to Home Assistant for the authorization result.')
 
     def _clear_gateway_webhook(self):
         if handle := getattr(self, '_gateway_webhook_timeout', None):
