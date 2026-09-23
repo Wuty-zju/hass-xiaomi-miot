@@ -123,7 +123,7 @@
             },
             "gateway_oauth": {
                 "title": "独立授权本地中枢",
-                "description": "打开[小米授权页面]({oauth_url})。小米要求固定回调域名 homeassistant.local:8123，不能直接改成反代域名。若授权后该地址打不开，可将浏览器地址栏中的完整回调 URL 粘贴到下方提交；也可仅将回调地址开头的协议和主机替换为当前可访问的 Home Assistant 反代地址后打开，保留路径及查询参数不变。回调 URL 含一次性授权码，请勿分享。",
+                "description": "① 打开[本次小米授权页面]({oauth_url})并完成授权。② 若浏览器无法访问固定回调域名 homeassistant.local:8123，只替换地址开头的协议和主机为可访问的 Home Assistant 地址，保留路径和参数；也可把完整回调地址粘贴到下方。③ 返回此页点击提交，等待令牌校验结果。回调页显示已收到仅代表 HA 收到请求，不代表小米已签发令牌。失败后必须使用新生成的授权链接，旧回调地址不可重用；含授权码的地址请勿分享。",
                 "data": {
                     "oauth_callback_url": "回调 URL（自动回调成功时留空）"
                 }
@@ -179,7 +179,7 @@
         "error": {
             "gateway_authorization_pending": "Home Assistant 尚未收到授权回调。",
             "gateway_authorization_failed": "本地中枢授权失败，请检查账号与网络。",
-            "gateway_token_exchange_failed": "已收到回调，但小米拒绝兑换授权码。页面已生成新的授权链接，请重新授权；旧回调地址不可重复使用。",
+            "gateway_token_exchange_failed": "HA 已收到回调，但小米拒绝签发令牌。请查看日志中的数字错误码，并使用本页新链接重新授权；旧回调地址不可重用。",
             "gateway_callback_invalid": "回调 URL 或授权状态无效，请重新复制完整地址。",
             "gateway_reuse_not_configured": "请先安装并配置官方 Xiaomi Home 集成。",
             "gateway_reuse_account_mismatch": "官方 Xiaomi Home 集成的账号或区域与当前 Miot 账号不一致。",
@@ -193,6 +193,7 @@
         },
         "abort": {
             "gateway_account_missing": "请先配置小米云端账号，再授权本地中枢网关。",
+            "gateway_instance_id_missing": "无法获取 Home Assistant 实例 ID，暂不能生成独立 OAuth 身份。",
             "show_customizes": "请再次添加[`Xiaomi Miot`](/_my_redirect/config_flow_start?domain=xiaomi_miot)集成来修改自定义选项\n{link}\n{tip}"
         }
     },
