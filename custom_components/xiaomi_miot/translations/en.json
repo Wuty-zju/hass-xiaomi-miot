@@ -236,6 +236,7 @@
         "error": {
             "gateway_authorization_pending": "Authorization has not reached Home Assistant yet.",
             "gateway_authorization_failed": "Could not authorize the local gateway. Check account and network access.",
+            "gateway_token_exchange_failed": "The callback arrived, but Xiaomi rejected the authorization-code exchange. A new authorization link is ready; the previous callback cannot be reused.",
             "gateway_callback_invalid": "Invalid callback URL or authorization state. Copy the complete address again.",
             "gateway_reuse_not_configured": "Install and configure the official Xiaomi Home integration first.",
             "gateway_reuse_account_mismatch": "The Xiaomi Home account or region does not match this Miot account.",
