@@ -180,7 +180,7 @@
             },
             "gateway_oauth": {
                 "title": "Authorize an independent local gateway",
-                "description": "Open [Xiaomi authorization]({oauth_url}). Xiaomi requires the fixed callback origin homeassistant.local:8123; do not change the OAuth redirect URI. If the browser cannot reach it after authorization, paste the full callback URL below. Alternatively, replace only the protocol and host at the start of the callback address with your reachable Home Assistant reverse-proxy origin, keeping the path and query unchanged. The callback URL contains a one-time code; do not share it.",
+                "description": "1. Open [this Xiaomi authorization link]({oauth_url}) and approve it. 2. If the browser cannot reach the fixed callback host homeassistant.local:8123, replace only its protocol and host with your reachable Home Assistant address, keeping the path and query; or paste the full callback address below. 3. Return here and submit to check the token result. Callback received means HA got the request, not that Xiaomi issued a token. After a failure, use the newly generated authorization link; never reuse an old callback or share its one-time code.",
                 "data": {
                     "oauth_callback_url": "Callback URL (leave blank if the callback arrived automatically)"
                 }
@@ -236,7 +236,7 @@
         "error": {
             "gateway_authorization_pending": "Authorization has not reached Home Assistant yet.",
             "gateway_authorization_failed": "Could not authorize the local gateway. Check account and network access.",
-            "gateway_token_exchange_failed": "The callback arrived, but Xiaomi rejected the authorization-code exchange. A new authorization link is ready; the previous callback cannot be reused.",
+            "gateway_token_exchange_failed": "HA received the callback, but Xiaomi rejected the token exchange. Check the numeric error in the log and use the new authorization link; the previous callback cannot be reused.",
             "gateway_callback_invalid": "Invalid callback URL or authorization state. Copy the complete address again.",
             "gateway_reuse_not_configured": "Install and configure the official Xiaomi Home integration first.",
             "gateway_reuse_account_mismatch": "The Xiaomi Home account or region does not match this Miot account.",
@@ -250,6 +250,7 @@
         },
         "abort": {
             "gateway_account_missing": "Configure a Xiaomi cloud account before authorizing the local gateway.",
+            "gateway_instance_id_missing": "The Home Assistant instance ID is unavailable, so an independent OAuth identity cannot be generated.",
             "show_customizes": "Add a new integration to modify customization.\n{link}\n{tip}"
         }
     },

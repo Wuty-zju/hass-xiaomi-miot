@@ -19,6 +19,7 @@ from custom_components.xiaomi_miot.core.gateway_auth import (
     generate_certificate_request,
     issue_gateway_certificate,
     oauth_account_uid,
+    oauth_device_id,
 )
 import pytest
 
@@ -33,6 +34,48 @@ def test_authorize_url_has_unique_state_and_no_password():
     assert params['device_id'] == ['ha.virtual-id']
     assert params['skip_confirm'] == ['False']
     assert 'password' not in params
+
+
+def test_oauth_device_id_matches_xiaomi_home_derivation():
+    expected = hashlib.sha256(b'ha-instance.12345.cn').hexdigest()[:32]
+    assert oauth_device_id('ha-instance', '12345', 'cn') == expected
+    with pytest.raises(GatewayAuthorizationError):
+        oauth_device_id('', '12345', 'cn')
+
+
+def test_authorization_and_token_exchange_share_device_and_redirect():
+    redirect = 'http://homeassistant.local:8123/api/webhook/12345'
+    device = oauth_device_id('ha-instance', '12345', 'cn')
+    auth_url, _ = authorize_url('123', redirect, device)
+    auth = parse_qs(urlparse(auth_url).query)
+    captured = {}
+
+    class Response:
+        status = 200
+        headers = {}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def text(self):
+            return json.dumps({'code': 0, 'result': {
+                'access_token': 'access', 'refresh_token': 'refresh',
+                'expires_in': 3600,
+            }})
+
+    def get(url, **kwargs):
+        captured.update(json.loads(kwargs['params']['data']))
+        return Response()
+
+    asyncio.run(exchange_token(
+        SimpleNamespace(get=get), 'cn', '123', redirect, device, code='fresh',
+    ))
+    assert captured['client_id'] == int(auth['client_id'][0])
+    assert captured['redirect_uri'] == auth['redirect_uri'][0]
+    assert captured['device_id'] == auth['device_id'][0]
 
 
 def test_copied_callback_works_without_browser_access_to_local_host():
@@ -85,6 +128,33 @@ def test_oauth_token_exchange_rejects_malformed_result():
             session, 'cn', '123', 'http://homeassistant.local:8123/hook',
             'virtual-id', code='code',
         ))
+
+
+def test_oauth_error_logs_only_numeric_fields():
+    class Response:
+        status = 200
+        headers = {}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def text(self):
+            return json.dumps({
+                'code': -6, 'error': 96002,
+                'error_description': 'secret authorization data',
+            })
+
+    session = SimpleNamespace(get=lambda *args, **kwargs: Response())
+    with pytest.raises(GatewayAuthorizationError) as raised:
+        asyncio.run(exchange_token(
+            session, 'cn', '123', 'http://homeassistant.local:8123/hook',
+            'virtual-id', code='code',
+        ))
+    assert 'Xiaomi code -6, error 96002' in str(raised.value)
+    assert 'secret' not in str(raised.value)
 
 
 def test_certificate_endpoint_uses_bearer_grant():

@@ -31,6 +31,7 @@ from homeassistant.components.webhook import (
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import format_mac
+from homeassistant.helpers.instance_id import async_get as async_get_instance_id
 from homeassistant.helpers.selector import ObjectSelector
 
 from . import (
@@ -76,6 +77,7 @@ from .core.gateway_auth import (
     generate_certificate_request,
     issue_gateway_certificate,
     oauth_account_uid,
+    oauth_device_id,
     validate_gateway_certificate,
 )
 from .core.gateway_manager import gateway_store
@@ -1168,7 +1170,13 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
             return self.async_abort(reason='gateway_account_missing')
         if not getattr(self, '_gateway_webhook_id', None):
             self._gateway_virtual_did = str(secrets.randbits(64))
-            self._gateway_oauth_device_id = secrets.token_hex(16)
+            instance_id = await async_get_instance_id(self.hass)
+            if not instance_id:
+                return self.async_abort(reason='gateway_instance_id_missing')
+            self._gateway_oauth_device_id = oauth_device_id(
+                instance_id, self._gateway_virtual_did,
+                self.saved_config.get(CONF_SERVER_COUNTRY, 'cn'),
+            )
             self._gateway_webhook_id = self._gateway_virtual_did
             self._gateway_auth_task = None
             self._gateway_redirect_uri = (

@@ -27,6 +27,15 @@ OAUTH_CLIENT_ID = '2882303761520251711'
 OAUTH_REDIRECT_ORIGIN = 'http://homeassistant.local:8123'
 
 
+def oauth_device_id(instance_id: str, virtual_did: str, region: str) -> str:
+    """Build the HA OAuth device ID used by Xiaomi Home for a virtual DID."""
+    if not instance_id or not virtual_did or not region:
+        raise GatewayAuthorizationError('OAuth device identity unavailable')
+    return hashlib.sha256(
+        f'{instance_id}.{virtual_did}.{region}'.encode()
+    ).hexdigest()[:32]
+
+
 def oauth_host(region: str) -> str:
     if region not in {'cn', 'de', 'i2', 'ru', 'sg', 'us'}:
         raise GatewayAuthorizationError('unsupported Xiaomi cloud region')
@@ -45,7 +54,9 @@ async def _read_api_response(response, operation: str) -> dict:
         raise GatewayAuthorizationError(f'{operation}: {reason}') from exc
     if not isinstance(result, dict) or result.get('code') != 0:
         code = result.get('code') if isinstance(result, dict) else None
-        raise GatewayAuthorizationError(f'{operation}: Xiaomi code {code}')
+        error = result.get('error') if isinstance(result, dict) else None
+        detail = f', error {error}' if type(error) is int else ''
+        raise GatewayAuthorizationError(f'{operation}: Xiaomi code {code}{detail}')
     return result
 
 
