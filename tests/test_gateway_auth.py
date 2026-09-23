@@ -16,6 +16,7 @@ from custom_components.xiaomi_miot.core.gateway_auth import (
     exchange_token,
     generate_certificate_request,
     issue_gateway_certificate,
+    oauth_account_uid,
 )
 import pytest
 
@@ -96,3 +97,23 @@ def test_certificate_endpoint_uses_bearer_grant():
     ))
     assert certificate.startswith('-----BEGIN CERTIFICATE-----')
     assert calls[0][1]['headers']['Authorization'] == 'Bearertoken'
+
+
+@pytest.mark.parametrize('payload', [None, {'code': 0, 'result': None},
+                                           {'code': 0, 'result': {'homelist': [None]}}])
+def test_account_lookup_rejects_malformed_response(payload):
+    class Response:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def json(self):
+            return payload
+
+    session = SimpleNamespace(post=lambda *args, **kwargs: Response())
+    with pytest.raises(GatewayAuthorizationError):
+        asyncio.run(oauth_account_uid(session, 'cn', '123', 'token'))

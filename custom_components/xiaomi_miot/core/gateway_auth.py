@@ -145,10 +145,11 @@ async def oauth_account_uid(session, region: str, client_id: str,
         if response.status != 200:
             raise GatewayAuthorizationError('OAuth account lookup failed')
         result = await response.json()
-    homes = result.get('result', {}).get('homelist') if isinstance(result, dict) else None
+    data = result.get('result') if isinstance(result, dict) else None
+    homes = data.get('homelist') if isinstance(data, dict) else None
     if not isinstance(result, dict) or result.get('code') != 0 or not isinstance(homes, list) or not homes:
         raise GatewayAuthorizationError('OAuth account has no owned home')
-    uid = homes[0].get('uid')
+    uid = homes[0].get('uid') if isinstance(homes[0], dict) else None
     if uid is None:
         raise GatewayAuthorizationError('OAuth account ID unavailable')
     return str(uid)
