@@ -1041,7 +1041,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
         data = self.config_entry.data
         if CONF_USERNAME in data:
             self.config_data = self.saved_config
-            return self.async_show_menu(step_id='init', menu_options=['cloud', 'gateway'])
+            return await self.async_step_cloud(user_input)
 
         if 'customizing_entity' in data or 'customizing_device' in data:
             return self.async_abort(
@@ -1069,52 +1069,37 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
             webhook_async_unregister(self.hass, webhook_id)
             self._gateway_webhook_id = None
 
-    async def async_step_gateway(self, user_input=None):
-        """Select scene transport without changing device connection settings."""
+    async def _async_set_gateway_mode(self, mode):
+        """Apply the scene transport selected in the existing cloud form."""
         runtime = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id) or {}
         cloud = runtime.get(CONF_XIAOMI_CLOUD) if isinstance(runtime, dict) else None
         account_uid = self.saved_config.get('user_id') or getattr(cloud, 'user_id', None)
         if not account_uid:
             return self.async_abort(reason='gateway_account_missing')
-        errors = {}
-        if user_input is not None:
-            mode = user_input[CONF_SCENE_GATEWAY_MODE]
-            if mode == 'reuse':
-                _, reason = compatible_gateway(
-                    self.hass, str(account_uid),
-                    self.saved_config.get(CONF_SERVER_COUNTRY, 'cn'),
-                )
-                if reason:
-                    errors['base'] = f'gateway_reuse_{reason}'
-            if not errors:
-                if mode == 'independent':
-                    stored = await gateway_store(
-                        self.hass, self.config_entry.entry_id,
-                    ).async_load() or {}
-                    if (str(stored.get('uid')) == str(account_uid)
-                            and stored.get('region') == self.saved_config.get(CONF_SERVER_COUNTRY, 'cn')
-                            and all(stored.get(key) for key in (
-                                'refresh_token', 'certificate', 'private_key',
-                            ))):
-                        return await self.async_step_gateway_auth_choice()
-                    return await self.async_step_gateway_oauth()
-                return self.async_create_entry(title='', data={
-                    **self.config_entry.options,
-                    CONF_SCENE_GATEWAY_MODE: mode,
+        if mode == 'reuse':
+            _, reason = compatible_gateway(
+                self.hass, str(account_uid),
+                self.saved_config.get(CONF_SERVER_COUNTRY, 'cn'),
+            )
+            if reason:
+                return await self.async_step_cloud(errors={
+                    'base': f'gateway_reuse_{reason}',
                 })
-        return self.async_show_form(
-            step_id='gateway',
-            data_schema=vol.Schema({
-                vol.Required(CONF_SCENE_GATEWAY_MODE, default=self.saved_config.get(
-                    CONF_SCENE_GATEWAY_MODE, 'off',
-                )): vol.In({
-                    'off': '关闭 / Off',
-                    'reuse': '复用 Xiaomi Home / Reuse Xiaomi Home',
-                    'independent': '独立授权 / Independent authorization',
-                }),
-            }),
-            errors=errors,
-        )
+        if mode == 'independent':
+            stored = await gateway_store(
+                self.hass, self.config_entry.entry_id,
+            ).async_load() or {}
+            if (str(stored.get('uid')) == str(account_uid)
+                    and stored.get('region') == self.saved_config.get(CONF_SERVER_COUNTRY, 'cn')
+                    and all(stored.get(key) for key in (
+                        'refresh_token', 'certificate', 'private_key',
+                    ))):
+                return await self.async_step_gateway_auth_choice()
+            return await self.async_step_gateway_oauth()
+        return self.async_create_entry(title='', data={
+            **self.config_entry.options,
+            CONF_SCENE_GATEWAY_MODE: mode,
+        })
 
     async def async_step_gateway_auth_choice(self, user_input=None):
         """Allow safe reuse or renewal of Miot's own existing grant."""
@@ -1145,7 +1130,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
         if not getattr(self, '_gateway_webhook_id', None):
             self._gateway_virtual_did = str(secrets.randbits(64))
             self._gateway_oauth_device_id = secrets.token_hex(16)
-            self._gateway_webhook_id = secrets.token_urlsafe(24)
+            self._gateway_webhook_id = self._gateway_virtual_did
             self._gateway_code = None
             self._gateway_redirect_uri = (
                 OAUTH_REDIRECT_ORIGIN
@@ -1267,14 +1252,28 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
             errors=errors,
         )
 
-    async def async_step_cloud(self, user_input=None):
-        errors = {}
+    async def async_step_cloud(self, user_input=None, errors=None):
+        errors = errors or {}
         prev_input = self.saved_config
         if isinstance(user_input, dict):
+            user_input = dict(user_input)
+            mode = user_input.pop(CONF_SCENE_GATEWAY_MODE, prev_input.get(
+                CONF_SCENE_GATEWAY_MODE, 'off',
+            ))
+            defaults = {CONF_CONN_MODE: DEFAULT_CONN_MODE,
+                        'renew_devices': False, 'trans_options': False,
+                        'disable_message': False, 'disable_scene_history': False}
+            if (not user_input.get('renew_devices') and
+                    all(prev_input.get(key, defaults.get(key)) == value
+                        for key, value in user_input.items())):
+                if mode != prev_input.get(CONF_SCENE_GATEWAY_MODE, 'off') or mode == 'independent':
+                    return await self._async_set_gateway_mode(mode)
             user_input = {
                 **prev_input,
                 **user_input,
             }
+            user_input.pop(CONF_SCENE_GATEWAY_MODE, None)
+            self._pending_gateway_mode = mode
             renew = not not user_input.pop('renew_devices', False)
             await self.check_xiaomi_account(user_input, errors, renew_devices=renew)
             if not errors:
@@ -1301,6 +1300,11 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
                 vol.In(CLOUD_SERVERS),
             vol.Required(CONF_CONN_MODE, default=user_input.get(CONF_CONN_MODE, DEFAULT_CONN_MODE)):
                 vol.In(CONN_MODES),
+            vol.Required(CONF_SCENE_GATEWAY_MODE, default=prev_input.get(
+                CONF_SCENE_GATEWAY_MODE, 'off',
+            )): vol.In({'off': '关闭 / Off',
+                        'reuse': '复用 Xiaomi Home / Reuse Xiaomi Home',
+                        'independent': '独立授权 / Independent authorization'}),
             vol.Optional('renew_devices', default=user_input.get('renew_devices', False)): bool,
             vol.Optional('trans_options', default=user_input.get('trans_options', False)): bool,
             vol.Optional('disable_message', default=user_input.get('disable_message', False)): bool,
@@ -1334,6 +1338,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
             })
             self.config_data.pop('filtering', None)
             self.config_data.pop('verify_ticket', None)
+            self.config_data.pop(CONF_SCENE_GATEWAY_MODE, None)
             if self.filter_models:
                 self.config_data.pop('filter_did', None)
                 self.config_data.pop('did_list', None)
@@ -1342,6 +1347,8 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
                 self.config_data.pop('model_list', None)
             self.hass.config_entries.async_update_entry(self.config_entry, data=self.config_data)
             _LOGGER.debug('Setup xiaomi cloud: %s', {**self.config_data, CONF_PASSWORD: '*', 'service_token': '*'})
+            if mode := getattr(self, '_pending_gateway_mode', None):
+                return await self._async_set_gateway_mode(mode)
             return self.async_create_entry(title='', data={})
         else:
             errors['base'] = 'unknown'

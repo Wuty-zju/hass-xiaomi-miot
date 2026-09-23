@@ -31,6 +31,7 @@ def test_authorize_url_has_unique_state_and_no_password():
     assert params['state'] == [state]
     assert params['client_id'] == ['123']
     assert params['device_id'] == ['ha.virtual-id']
+    assert params['skip_confirm'] == ['false']
     assert 'password' not in params
 
 
