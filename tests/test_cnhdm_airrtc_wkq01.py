@@ -406,6 +406,8 @@ async def test_registry_preserves_air_conditioner_identity_across_reload(
 
     with (
         patch.object(Device, "async_init", async_init_from_fixture),
+        patch("homeassistant.components.zeroconf.async_setup", new_callable=AsyncMock,
+              return_value=True),
         patch(
             "custom_components.xiaomi_miot.SUPPORTED_DOMAINS",
             ["climate", "fan"],

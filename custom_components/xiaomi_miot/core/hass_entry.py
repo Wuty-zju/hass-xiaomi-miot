@@ -29,6 +29,7 @@ class HassEntry:
         self.mac_to_did = {}
         self.did_to_unique = {}
         self.clouds: dict[CloudSid, Optional[MiotCloud]] = {}
+        self.local_gateway = None
         self._cloud_lock = asyncio.Lock()
 
     @staticmethod
@@ -49,6 +50,9 @@ class HassEntry:
             )
         )
         if ret:
+            if self.local_gateway:
+                await self.local_gateway.close()
+                self.local_gateway = None
             for device in self.devices.values():
                 await device.async_unload()
             self.clouds.clear()

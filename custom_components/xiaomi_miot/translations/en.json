@@ -171,6 +171,20 @@
     },
     "options": {
         "step": {
+            "init": {
+                "title": "Configure Xiaomi Miot",
+                "menu_options": {
+                    "cloud": "Cloud account and devices",
+                    "gateway": "Authorize local central gateway"
+                }
+            },
+            "gateway": {
+                "title": "Authorize local central gateway",
+                "description": "Open [Xiaomi authorization]({oauth_url}) on a device that can reach homeassistant.local:8123. After approval, return here and continue. This creates a separate OAuth grant and certificate for Xiaomi Miot.",
+                "data": {
+                    "finish_authorization": "I have completed authorization"
+                }
+            },
             "user": {
                 "title": "Xiaomi Miot",
                 "description": "Config device info.",
@@ -219,6 +233,8 @@
             }
         },
         "error": {
+            "gateway_authorization_pending": "Authorization has not reached Home Assistant yet.",
+            "gateway_authorization_failed": "Could not authorize the local gateway. Check account and network access.",
             "cannot_connect": "Failed to connect to the device",
             "cannot_login": "Failed to login to the Xiaomi account. Please check your account credentials. If login attempts fail multiple times, please try logging in again on the Xiaomi official website (mi.com) using the same network environment.",
             "cannot_reach": "Unable to access the Xiaomi API interface",
@@ -227,6 +243,7 @@
             "need_verify": "This login requires security verification. Please open the verification link below to send the mobile/email verification code. After receiving the verification code, do not verify it on the webpage. Go back to Home Assistant and enter it in the input box below."
         },
         "abort": {
+            "gateway_account_missing": "Configure a Xiaomi cloud account before authorizing the local gateway.",
             "show_customizes": "Add a new integration to modify customization.\n{link}\n{tip}"
         }
     },

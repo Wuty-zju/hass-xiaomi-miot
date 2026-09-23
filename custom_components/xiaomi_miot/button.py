@@ -18,6 +18,8 @@ from . import (
     async_setup_config_entry,
 )
 from .core.templates import template
+from .core.const import CONF_CONN_MODE
+from .core.local_gateway import GatewayResultUnknown, GatewayUnavailable
 from .core.xiaomi_cloud import MiCloudException
 
 _LOGGER = logging.getLogger(__name__)
@@ -39,7 +41,7 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
         return
     names = _manual_scene_button_names(scenes)
     async_add_entities([
-        ManualSceneButton(entry.cloud, scene, name)
+        ManualSceneButton(entry.cloud, scene, name, entry)
         for scene, name in zip(scenes, names)
     ])
 
@@ -95,9 +97,10 @@ class ManualSceneButton(BaseEntity):
     _attr_has_entity_name = True
     _attr_icon = 'mdi:play'
 
-    def __init__(self, cloud, scene, name):
+    def __init__(self, cloud, scene, name, entry=None):
         self.cloud = cloud
         self.scene = scene
+        self.entry = entry
         self._attr_name = name
         self._attr_unique_id = (
             f'{cloud.unique_id}-manual-scene-'
@@ -115,6 +118,25 @@ class ManualSceneButton(BaseEntity):
         }
 
     async def async_press(self):
+        mode = self.entry.get_config(CONF_CONN_MODE) if self.entry else 'cloud'
+        if mode != 'cloud':
+            manager = self.entry.local_gateway if self.entry else None
+            try:
+                if not manager:
+                    raise GatewayUnavailable('local gateway is not configured')
+                if await manager.run_scene(self.scene):
+                    return
+            except GatewayUnavailable as exc:
+                if mode == 'local':
+                    raise HomeAssistantError(
+                        f'Local Xiaomi Home scene unavailable: {self.name}'
+                    ) from exc
+            except GatewayResultUnknown as exc:
+                # A request may have reached the gateway; retrying in the cloud
+                # could execute the scene twice.
+                raise HomeAssistantError(
+                    f'Local Xiaomi Home scene result unknown: {self.name}'
+                ) from exc
         try:
             success = await self.cloud.async_run_manual_scene(self.scene)
         except MiCloudException as exc:

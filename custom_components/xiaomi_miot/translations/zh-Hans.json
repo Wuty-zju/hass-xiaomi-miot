@@ -114,6 +114,20 @@
     },
     "options": {
         "step": {
+            "init": {
+                "title": "配置 Xiaomi Miot",
+                "menu_options": {
+                    "cloud": "云端账号和设备",
+                    "gateway": "授权本地中枢网关"
+                }
+            },
+            "gateway": {
+                "title": "授权本地中枢网关",
+                "description": "请在能访问 homeassistant.local:8123 的设备上打开[小米授权页面]({oauth_url})。完成授权后返回此处继续。此操作会为 Xiaomi Miot 建立独立的 OAuth 授权和中枢证书。",
+                "data": {
+                    "finish_authorization": "我已完成授权"
+                }
+            },
             "user": {
                 "title": "Xiaomi Miot",
                 "description": "配置设备信息",
@@ -162,6 +176,8 @@
             }
         },
         "error": {
+            "gateway_authorization_pending": "Home Assistant 尚未收到授权回调。",
+            "gateway_authorization_failed": "本地中枢授权失败，请检查账号与网络。",
             "cannot_connect": "连接设备失败",
             "cannot_login": "小米账户登录失败，请检查账号密码。如多次尝试仍登录失败，请使用与HA宿主机同一局域网下的其他设备登录小米官网(mi.com)后重试",
             "cannot_reach": "无法访问小米API接口",
@@ -170,6 +186,7 @@
             "need_verify": "本次登录需要安全验证。请打开下方验证链接发送手机/邮箱验证码，收到验证码后不要在网页验证，回到 Home Assistant 填入下方输入框。"
         },
         "abort": {
+            "gateway_account_missing": "请先配置小米云端账号，再授权本地中枢网关。",
             "show_customizes": "请再次添加[`Xiaomi Miot`](/_my_redirect/config_flow_start?domain=xiaomi_miot)集成来修改自定义选项\n{link}\n{tip}"
         }
     },

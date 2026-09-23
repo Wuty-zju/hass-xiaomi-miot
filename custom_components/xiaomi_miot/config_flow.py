@@ -2,8 +2,11 @@
 import logging
 import re
 import copy
+import secrets
 import requests
+import aiohttp
 import voluptuous as vol
+from aiohttp import web
 
 from typing import Optional
 from dataclasses import dataclass
@@ -19,7 +22,13 @@ from homeassistant.const import (
 from homeassistant.core import callback, split_entity_id
 from homeassistant.util import yaml
 from homeassistant.components import persistent_notification
+from homeassistant.components.webhook import (
+    async_generate_path as webhook_async_generate_path,
+    async_register as webhook_async_register,
+    async_unregister as webhook_async_unregister,
+)
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import format_mac
 from homeassistant.helpers.selector import ObjectSelector
 
@@ -55,6 +64,18 @@ from .core.xiaomi_cloud import (
     MiCloudStsUnauthorized,
     MiCloudVerificationError,
 )
+from .core.gateway_auth import (
+    GatewayAuthorizationError,
+    OAUTH_CLIENT_ID,
+    OAUTH_REDIRECT_ORIGIN,
+    authorize_url,
+    exchange_token,
+    generate_certificate_request,
+    issue_gateway_certificate,
+    oauth_account_uid,
+    validate_gateway_certificate,
+)
+from .core.gateway_manager import gateway_store
 
 _LOGGER = logging.getLogger(__name__)
 DEFAULT_INTERVAL = 30
@@ -1017,7 +1038,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
         data = self.config_entry.data
         if CONF_USERNAME in data:
             self.config_data = self.saved_config
-            return await self.async_step_cloud(user_input)
+            return self.async_show_menu(step_id='init', menu_options=['cloud', 'gateway'])
 
         if 'customizing_entity' in data or 'customizing_device' in data:
             return self.async_abort(
@@ -1029,6 +1050,110 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
             )
 
         return await self.async_step_user()
+
+    async def _gateway_oauth_webhook(self, hass, webhook_id, request):
+        query = request.query
+        if query.get('state') != self._gateway_state or not query.get('code'):
+            return web.Response(text='Xiaomi authorization state invalid', status=400)
+        self._gateway_code = query['code']
+        return web.Response(text='Authorization received. Return to Home Assistant and continue.')
+
+    def _clear_gateway_webhook(self):
+        if handle := getattr(self, '_gateway_webhook_timeout', None):
+            handle.cancel()
+            self._gateway_webhook_timeout = None
+        if webhook_id := getattr(self, '_gateway_webhook_id', None):
+            webhook_async_unregister(self.hass, webhook_id)
+            self._gateway_webhook_id = None
+
+    async def async_step_gateway(self, user_input=None):
+        """Authorize this integration's own gateway MQTT identity."""
+        runtime = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id) or {}
+        cloud = runtime.get(CONF_XIAOMI_CLOUD) if isinstance(runtime, dict) else None
+        account_uid = self.saved_config.get('user_id') or getattr(cloud, 'user_id', None)
+        if not account_uid:
+            return self.async_abort(reason='gateway_account_missing')
+        if not getattr(self, '_gateway_webhook_id', None):
+            self._gateway_virtual_did = str(secrets.randbits(64))
+            self._gateway_oauth_device_id = secrets.token_hex(16)
+            self._gateway_webhook_id = secrets.token_urlsafe(24)
+            self._gateway_code = None
+            self._gateway_redirect_uri = (
+                OAUTH_REDIRECT_ORIGIN
+                + webhook_async_generate_path(self._gateway_webhook_id)
+            )
+            self._gateway_url, self._gateway_state = authorize_url(
+                OAUTH_CLIENT_ID, self._gateway_redirect_uri,
+                self._gateway_oauth_device_id,
+            )
+            webhook_async_register(
+                self.hass, DOMAIN, 'Xiaomi Miot gateway OAuth',
+                self._gateway_webhook_id, self._gateway_oauth_webhook,
+                allowed_methods=('GET',),
+            )
+            self._gateway_webhook_timeout = self.hass.loop.call_later(
+                600, self._clear_gateway_webhook,
+            )
+
+        errors = {}
+        if user_input is not None:
+            if not self._gateway_code:
+                errors['base'] = 'gateway_authorization_pending'
+            else:
+                region = self.saved_config.get(CONF_SERVER_COUNTRY, 'cn')
+                uid = str(account_uid)
+                session = async_get_clientsession(self.hass)
+                try:
+                    token = await exchange_token(
+                        session, region, OAUTH_CLIENT_ID,
+                        self._gateway_redirect_uri, self._gateway_oauth_device_id,
+                        code=self._gateway_code,
+                    )
+                    oauth_uid = await oauth_account_uid(
+                        session, region, OAUTH_CLIENT_ID, token['access_token'],
+                    )
+                    if oauth_uid != uid:
+                        raise GatewayAuthorizationError('OAuth account does not match Miot account')
+                    private_key, csr = generate_certificate_request(
+                        uid, self._gateway_virtual_did,
+                    )
+                    certificate = await issue_gateway_certificate(
+                        session, region, OAUTH_CLIENT_ID,
+                        token['access_token'], csr,
+                    )
+                    validate_gateway_certificate(
+                        certificate, uid, self._gateway_virtual_did,
+                    )
+                    await gateway_store(self.hass, self.config_entry.entry_id).async_save({
+                        **token,
+                        'uid': uid,
+                        'region': region,
+                        'oauth_device_id': self._gateway_oauth_device_id,
+                        'virtual_did': self._gateway_virtual_did,
+                        'redirect_uri': self._gateway_redirect_uri,
+                        'private_key': private_key,
+                        'certificate': certificate,
+                    })
+                except (GatewayAuthorizationError, aiohttp.ClientError,
+                        TimeoutError, ValueError, KeyError) as exc:
+                    _LOGGER.warning('Gateway OAuth setup failed: %s', exc)
+                    self._gateway_code = None
+                    errors['base'] = 'gateway_authorization_failed'
+                else:
+                    self._clear_gateway_webhook()
+                    return self.async_create_entry(title='', data={
+                        **self.config_entry.options,
+                        'gateway_auth_revision': secrets.token_hex(8),
+                    })
+
+        return self.async_show_form(
+            step_id='gateway',
+            data_schema=vol.Schema({
+                vol.Optional('finish_authorization', default=False): bool,
+            }),
+            errors=errors,
+            description_placeholders={'oauth_url': self._gateway_url},
+        )
 
     async def async_step_user(self, user_input=None):
         errors = {}

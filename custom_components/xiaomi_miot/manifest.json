@@ -8,7 +8,8 @@
     "http",
     "intent",
     "persistent_notification",
-    "ffmpeg"
+    "ffmpeg",
+    "zeroconf"
   ],
   "documentation": "https://github.com/al-one/hass-xiaomi-miot",
   "iot_class": "cloud_polling",
@@ -16,7 +17,9 @@
   "requirements": [
     "construct>=2.10.68",
     "python-miio>=0.5.12",
-    "micloud>=0.5"
+    "micloud>=0.5",
+    "paho-mqtt>=2.1.0",
+    "cryptography>=42.0.0"
   ],
   "version": "1.1.6.2"
 }

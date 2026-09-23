@@ -341,6 +341,16 @@ async def async_setup_xiaomi_cloud(hass: hass_core.HomeAssistant, config_entry: 
         config['configs'].append(cfg)
         _LOGGER.debug('Xiaomi cloud device: %s', {**cfg, CONF_TOKEN: '****'})
     hass.data[DOMAIN][entry_id] = config
+    if hass_entry.get_config(CONF_CONN_MODE) != 'cloud':
+        from .core.gateway_manager import GatewayManager
+        manager = GatewayManager(hass, entry_id, cloud)
+        try:
+            await manager.start()
+        except Exception as exc:
+            _LOGGER.warning('Local gateway setup unavailable: %s', exc)
+            await manager.close()
+        else:
+            hass_entry.local_gateway = manager
     return True
 
 
