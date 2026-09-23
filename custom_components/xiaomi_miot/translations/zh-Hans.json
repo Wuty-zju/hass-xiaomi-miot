@@ -179,6 +179,7 @@
         "error": {
             "gateway_authorization_pending": "Home Assistant 尚未收到授权回调。",
             "gateway_authorization_failed": "本地中枢授权失败，请检查账号与网络。",
+            "gateway_token_exchange_failed": "已收到回调，但小米拒绝兑换授权码。页面已生成新的授权链接，请重新授权；旧回调地址不可重复使用。",
             "gateway_callback_invalid": "回调 URL 或授权状态无效，请重新复制完整地址。",
             "gateway_reuse_not_configured": "请先安装并配置官方 Xiaomi Home 集成。",
             "gateway_reuse_account_mismatch": "官方 Xiaomi Home 集成的账号或区域与当前 Miot 账号不一致。",

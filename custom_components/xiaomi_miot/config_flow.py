@@ -1,5 +1,6 @@
 """Config flow to configure Xiaomi Miot."""
 import logging
+import asyncio
 import re
 import copy
 import secrets
@@ -1058,8 +1059,11 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
         query = request.query
         if query.get('state') != self._gateway_state or not query.get('code'):
             return web.Response(text='Xiaomi authorization state invalid', status=400)
-        self._gateway_code = query['code']
-        return web.Response(text='Authorization received. Return to Home Assistant and continue.')
+        if not getattr(self, '_gateway_auth_task', None):
+            self._gateway_auth_task = asyncio.create_task(
+                self._async_exchange_gateway_code(query['code'])
+            )
+        return web.Response(text='Callback received. Return to Home Assistant for the authorization result.')
 
     def _clear_gateway_webhook(self):
         if handle := getattr(self, '_gateway_webhook_timeout', None):
@@ -1068,6 +1072,41 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
         if webhook_id := getattr(self, '_gateway_webhook_id', None):
             webhook_async_unregister(self.hass, webhook_id)
             self._gateway_webhook_id = None
+
+    async def _async_exchange_gateway_code(self, code):
+        """Redeem an authorization code once, as soon as it arrives."""
+        runtime = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id) or {}
+        cloud = runtime.get(CONF_XIAOMI_CLOUD) if isinstance(runtime, dict) else None
+        uid = str(self.saved_config.get('user_id') or getattr(cloud, 'user_id', None))
+        region = self.saved_config.get(CONF_SERVER_COUNTRY, 'cn')
+        session = async_get_clientsession(self.hass)
+        token = await exchange_token(
+            session, region, OAUTH_CLIENT_ID,
+            self._gateway_redirect_uri, self._gateway_oauth_device_id,
+            code=code,
+        )
+        oauth_uid = await oauth_account_uid(
+            session, region, OAUTH_CLIENT_ID, token['access_token'],
+        )
+        if oauth_uid != uid:
+            raise GatewayAuthorizationError('OAuth account does not match Miot account')
+        private_key, csr = generate_certificate_request(
+            uid, self._gateway_virtual_did,
+        )
+        certificate = await issue_gateway_certificate(
+            session, region, OAUTH_CLIENT_ID, token['access_token'], csr,
+        )
+        validate_gateway_certificate(certificate, uid, self._gateway_virtual_did)
+        await gateway_store(self.hass, self.config_entry.entry_id).async_save({
+            **token,
+            'uid': uid,
+            'region': region,
+            'oauth_device_id': self._gateway_oauth_device_id,
+            'virtual_did': self._gateway_virtual_did,
+            'redirect_uri': self._gateway_redirect_uri,
+            'private_key': private_key,
+            'certificate': certificate,
+        })
 
     async def _async_set_gateway_mode(self, mode):
         """Apply the scene transport selected in the existing cloud form."""
@@ -1120,7 +1159,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
             }),
         )
 
-    async def async_step_gateway_oauth(self, user_input=None):
+    async def async_step_gateway_oauth(self, user_input=None, error=None):
         """Authorize an independent identity for the local gateway."""
         runtime = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id) or {}
         cloud = runtime.get(CONF_XIAOMI_CLOUD) if isinstance(runtime, dict) else None
@@ -1131,7 +1170,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
             self._gateway_virtual_did = str(secrets.randbits(64))
             self._gateway_oauth_device_id = secrets.token_hex(16)
             self._gateway_webhook_id = self._gateway_virtual_did
-            self._gateway_code = None
+            self._gateway_auth_task = None
             self._gateway_redirect_uri = (
                 OAUTH_REDIRECT_ORIGIN
                 + webhook_async_generate_path(self._gateway_webhook_id)
@@ -1149,61 +1188,37 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
                 600, self._clear_gateway_webhook,
             )
 
-        errors = {}
+        errors = {'base': error} if error else {}
         if user_input is not None:
             callback_url = user_input.get('oauth_callback_url') or ''
             if callback_url:
                 try:
-                    self._gateway_code = callback_authorization_code(
+                    code = callback_authorization_code(
                         callback_url, self._gateway_redirect_uri,
                         self._gateway_state,
                     )
+                    if not self._gateway_auth_task:
+                        self._gateway_auth_task = asyncio.create_task(
+                            self._async_exchange_gateway_code(code)
+                        )
                 except GatewayAuthorizationError:
                     errors['base'] = 'gateway_callback_invalid'
-            if not errors and not self._gateway_code:
+            if not errors and not self._gateway_auth_task:
                 errors['base'] = 'gateway_authorization_pending'
             if not errors:
-                region = self.saved_config.get(CONF_SERVER_COUNTRY, 'cn')
-                uid = str(account_uid)
-                session = async_get_clientsession(self.hass)
                 try:
-                    token = await exchange_token(
-                        session, region, OAUTH_CLIENT_ID,
-                        self._gateway_redirect_uri, self._gateway_oauth_device_id,
-                        code=self._gateway_code,
-                    )
-                    oauth_uid = await oauth_account_uid(
-                        session, region, OAUTH_CLIENT_ID, token['access_token'],
-                    )
-                    if oauth_uid != uid:
-                        raise GatewayAuthorizationError('OAuth account does not match Miot account')
-                    private_key, csr = generate_certificate_request(
-                        uid, self._gateway_virtual_did,
-                    )
-                    certificate = await issue_gateway_certificate(
-                        session, region, OAUTH_CLIENT_ID,
-                        token['access_token'], csr,
-                    )
-                    validate_gateway_certificate(
-                        certificate, uid, self._gateway_virtual_did,
-                    )
-                    await gateway_store(self.hass, self.config_entry.entry_id).async_save({
-                        **token,
-                        'uid': uid,
-                        'region': region,
-                        'oauth_device_id': self._gateway_oauth_device_id,
-                        'virtual_did': self._gateway_virtual_did,
-                        'redirect_uri': self._gateway_redirect_uri,
-                        'private_key': private_key,
-                        'certificate': certificate,
-                    })
+                    await self._gateway_auth_task
                 except (GatewayAuthorizationError, aiohttp.ClientError,
                         TimeoutError, ValueError, KeyError) as exc:
                     # aiohttp errors may include the URL and its one-time code.
                     detail = str(exc) if isinstance(exc, GatewayAuthorizationError) else type(exc).__name__
                     _LOGGER.warning('Gateway OAuth setup failed: %s', detail)
-                    self._gateway_code = None
-                    errors['base'] = 'gateway_authorization_failed'
+                    self._clear_gateway_webhook()
+                    return await self.async_step_gateway_oauth(
+                        error='gateway_token_exchange_failed'
+                        if detail.startswith('OAuth token request')
+                        else 'gateway_authorization_failed',
+                    )
                 else:
                     self._clear_gateway_webhook()
                     return self.async_create_entry(title='', data={

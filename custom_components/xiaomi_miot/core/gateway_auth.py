@@ -59,7 +59,7 @@ def authorize_url(client_id: str, redirect_uri: str, device_id: str,
         'response_type': 'code',
         'device_id': f'ha.{device_id}',
         'state': state,
-        'skip_confirm': 'false',
+        'skip_confirm': False,
     })
     return f'https://account.xiaomi.com/oauth2/authorize?{query}', state
 
