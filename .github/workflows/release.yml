@@ -53,6 +53,8 @@ jobs:
             --mtime="@${archive_mtime}" \
             --output="${ASSET_PATH}" \
             HEAD:custom_components/xiaomi_miot
+          touch -d "@${archive_mtime}" LICENSE
+          zip -X -q "${ASSET_PATH}" LICENSE
           unzip -t "${ASSET_PATH}"
           (
             cd "$(dirname "${ASSET_PATH}")"
