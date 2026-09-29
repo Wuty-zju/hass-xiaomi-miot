@@ -154,7 +154,10 @@ class LocalGatewayClient:
             raise GatewayResultUnknown('gateway publish outcome unknown') from exc
         if result.rc != mqtt.MQTT_ERR_SUCCESS:
             self._pending.pop(message_id, None)
-            raise GatewayUnavailable('gateway publish rejected')
+            future.cancel()
+            # QoS 2 messages may remain queued even on MQTT_ERR_NO_CONN.
+            # A subsequent cloud execution could duplicate the local command.
+            raise GatewayResultUnknown('gateway publish outcome unknown')
         try:
             return json.loads(await asyncio.wait_for(future, timeout))
         except (TimeoutError, UnicodeDecodeError, ValueError) as exc:

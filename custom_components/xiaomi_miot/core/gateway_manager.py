@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+import logging
 import os
 from pathlib import Path
 import tempfile
@@ -26,6 +27,8 @@ from .local_gateway import (
     GatewayUnavailable,
     LocalGatewayClient,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def gateway_store(hass, entry_id):
@@ -71,6 +74,10 @@ class GatewayManager:
         await self._discovery.start()
 
     async def close(self):
+        async with self._credential_lock:
+            await self._close()
+
+    async def _close(self):
         for client in self._clients.values():
             await client.close()
         self._clients.clear()
@@ -88,17 +95,8 @@ class GatewayManager:
                     or str(credentials.get('uid')) != str(self.cloud.user_id)
                     or credentials.get('region') != self.cloud.default_server):
                 raise GatewayUnavailable('gateway OAuth account is not configured')
-            session = async_get_clientsession(self.hass)
-            if credentials['expires_at'] <= time.time():
-                token = await exchange_token(
-                    session, credentials['region'], OAUTH_CLIENT_ID,
-                    credentials['redirect_uri'], credentials['oauth_device_id'],
-                    refresh_token=credentials['refresh_token'],
-                )
-                credentials.update(token)
-                await self._store.async_save(credentials)
-
             certificate = credentials.get('certificate')
+            expires = None
             if certificate:
                 try:
                     expires = validate_gateway_certificate(
@@ -109,17 +107,32 @@ class GatewayManager:
                         return
                 except GatewayAuthorizationError:
                     pass
-            private_key, csr = generate_certificate_request(
-                str(credentials['uid']), credentials['virtual_did'],
-                credentials.get('private_key'),
-            )
-            certificate = await issue_gateway_certificate(
-                session, credentials['region'], OAUTH_CLIENT_ID,
-                credentials['access_token'], csr,
-            )
-            validate_gateway_certificate(
-                certificate, str(credentials['uid']), credentials['virtual_did'],
-            )
+            session = async_get_clientsession(self.hass)
+            try:
+                if credentials['expires_at'] <= time.time():
+                    token = await exchange_token(
+                        session, credentials['region'], OAUTH_CLIENT_ID,
+                        credentials['redirect_uri'], credentials['oauth_device_id'],
+                        refresh_token=credentials['refresh_token'],
+                    )
+                    credentials.update(token)
+                    await self._store.async_save(credentials)
+                private_key, csr = generate_certificate_request(
+                    str(credentials['uid']), credentials['virtual_did'],
+                    credentials.get('private_key'),
+                )
+                certificate = await issue_gateway_certificate(
+                    session, credentials['region'], OAUTH_CLIENT_ID,
+                    credentials['access_token'], csr,
+                )
+                validate_gateway_certificate(
+                    certificate, str(credentials['uid']), credentials['virtual_did'],
+                )
+            except (GatewayAuthorizationError, aiohttp.ClientError, TimeoutError):
+                if expires and expires > datetime.now(timezone.utc):
+                    _LOGGER.debug('Gateway certificate renewal unavailable; using valid certificate')
+                    return
+                raise
             credentials.update(private_key=private_key, certificate=certificate)
             await self._store.async_save(credentials)
             for client in self._clients.values():
@@ -127,6 +140,14 @@ class GatewayManager:
             self._clients.clear()
 
     async def _client_for(self, address):
+        # Coordinate creation with credential rotation and unload, including
+        # the executor write which otherwise lets concurrent callers race.
+        async with self._credential_lock:
+            if self._directory is None:
+                raise GatewayUnavailable('gateway manager is closed')
+            return await self._create_client(address)
+
+    async def _create_client(self, address):
         key = (address.group_id, address.host, address.port)
         client = self._clients.get(key)
         if client:
