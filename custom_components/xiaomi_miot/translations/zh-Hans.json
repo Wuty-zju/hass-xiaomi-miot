@@ -1,4 +1,12 @@
 {
+    "selector": {
+        "gateway_auth_action": {
+            "options": {"existing": "使用已有授权", "renew": "重新授权"}
+        },
+        "scene_gateway_mode": {
+            "options": {"off": "关闭", "reuse": "复用 Xiaomi Home", "independent": "独立授权"}
+        }
+    },
     "config": {
         "flow_title": "Xiaomi Miot",
         "step": {

@@ -95,3 +95,12 @@ def test_shared_home_uses_owner_group_but_same_authorized_account():
         local.exec_action_group_list_async.assert_awaited_once_with('42')
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('groups', [None, '42', {'42': True}, [], ['other']])
+async def test_reuse_never_executes_without_a_valid_scene_list(groups):
+    hass, local = _hass()
+    local.get_action_group_list_async.return_value = groups
+    with pytest.raises(GatewayUnavailable):
+        await XiaomiHomeGateway(hass, '1000', 'cn').run_scene(SCENE)
+    local.exec_action_group_list_async.assert_not_awaited()

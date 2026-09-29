@@ -76,7 +76,7 @@ class XiaomiHomeGateway:
         except Exception as exc:
             raise GatewayUnavailable('Xiaomi Home scene list unavailable') from exc
         scene_id = str(scene['scene_id'])
-        if scene_id not in groups:
+        if not isinstance(groups, list) or scene_id not in groups:
             raise GatewayUnavailable('scene not present on Xiaomi Home gateway')
         try:
             result = await local.exec_action_group_list_async(scene_id)

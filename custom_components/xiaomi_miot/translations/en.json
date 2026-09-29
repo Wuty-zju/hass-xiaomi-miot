@@ -1,4 +1,12 @@
 {
+    "selector": {
+        "gateway_auth_action": {
+            "options": {"existing": "Use existing authorization", "renew": "Authorize again"}
+        },
+        "scene_gateway_mode": {
+            "options": {"off": "Off", "reuse": "Reuse Xiaomi Home", "independent": "Independent authorization"}
+        }
+    },
     "config": {
         "flow_title": "Xiaomi Miot",
         "step": {

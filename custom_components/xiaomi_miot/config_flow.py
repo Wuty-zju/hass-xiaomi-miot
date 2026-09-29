@@ -32,7 +32,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import format_mac
 from homeassistant.helpers.instance_id import async_get as async_get_instance_id
-from homeassistant.helpers.selector import ObjectSelector
+from homeassistant.helpers.selector import ObjectSelector, SelectSelector, SelectSelectorConfig
 
 from . import (
     DOMAIN,
@@ -1059,13 +1059,39 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
 
     async def _gateway_oauth_webhook(self, hass, webhook_id, request):
         query = request.query
-        if query.get('state') != self._gateway_state or not query.get('code'):
+        if (getattr(self, '_gateway_expired', False)
+                or query.get('state') != self._gateway_state or not query.get('code')):
             return web.Response(text='Xiaomi authorization state invalid', status=400)
+        self._start_gateway_exchange(query['code'])
+        return web.Response(text='Callback received. Return to Home Assistant for the authorization result.')
+
+    def _start_gateway_exchange(self, code):
+        if getattr(self, '_gateway_expired', False):
+            return
         if not getattr(self, '_gateway_auth_task', None):
             self._gateway_auth_task = asyncio.create_task(
-                self._async_exchange_gateway_code(query['code'])
+                self._async_exchange_gateway_code(code)
             )
-        return web.Response(text='Callback received. Return to Home Assistant for the authorization result.')
+            self._gateway_auth_task.add_done_callback(self._gateway_exchange_done)
+
+    @staticmethod
+    def _gateway_exchange_done(task):
+        # Collect errors even if the user never returns to the options flow.
+        # The flow still awaits the task to show the appropriate error.
+        if not task.cancelled() and (error := task.exception()):
+            _LOGGER.debug('Gateway authorization task failed: %s', type(error).__name__)
+
+    @callback
+    def async_remove(self):
+        self._expire_gateway_authorization()
+        super().async_remove()
+
+    def _expire_gateway_authorization(self):
+        self._gateway_expired = True
+        self._clear_gateway_webhook()
+        if task := getattr(self, '_gateway_auth_task', None):
+            if not task.done():
+                task.cancel()
 
     def _clear_gateway_webhook(self):
         if handle := getattr(self, '_gateway_webhook_timeout', None):
@@ -1154,10 +1180,9 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
         return self.async_show_form(
             step_id='gateway_auth_choice',
             data_schema=vol.Schema({
-                vol.Required('gateway_auth_action', default='existing'): vol.In({
-                    'existing': '使用已有授权 / Use existing authorization',
-                    'renew': '重新授权 / Authorize again',
-                }),
+                vol.Required('gateway_auth_action', default='existing'): SelectSelector(
+                    SelectSelectorConfig(options=['existing', 'renew'], translation_key='gateway_auth_action'),
+                ),
             }),
         )
 
@@ -1169,6 +1194,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
         if not account_uid:
             return self.async_abort(reason='gateway_account_missing')
         if not getattr(self, '_gateway_webhook_id', None):
+            self._gateway_expired = False
             self._gateway_virtual_did = str(secrets.randbits(64))
             instance_id = await async_get_instance_id(self.hass)
             if not instance_id:
@@ -1193,7 +1219,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
                 allowed_methods=('GET',),
             )
             self._gateway_webhook_timeout = self.hass.loop.call_later(
-                600, self._clear_gateway_webhook,
+                600, self._expire_gateway_authorization,
             )
 
         errors = {'base': error} if error else {}
@@ -1205,10 +1231,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
                         callback_url, self._gateway_redirect_uri,
                         self._gateway_state,
                     )
-                    if not self._gateway_auth_task:
-                        self._gateway_auth_task = asyncio.create_task(
-                            self._async_exchange_gateway_code(code)
-                        )
+                    self._start_gateway_exchange(code)
                 except GatewayAuthorizationError:
                     errors['base'] = 'gateway_callback_invalid'
             if not errors and not self._gateway_auth_task:
@@ -1216,6 +1239,10 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
             if not errors:
                 try:
                     await self._gateway_auth_task
+                except asyncio.CancelledError:
+                    if not getattr(self, '_gateway_expired', False):
+                        raise
+                    return await self.async_step_gateway_oauth(error='gateway_authorization_failed')
                 except (GatewayAuthorizationError, aiohttp.ClientError,
                         TimeoutError, ValueError, KeyError) as exc:
                     # aiohttp errors may include the URL and its one-time code.
@@ -1325,9 +1352,9 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
                 vol.In(CONN_MODES),
             vol.Required(CONF_SCENE_GATEWAY_MODE, default=prev_input.get(
                 CONF_SCENE_GATEWAY_MODE, 'off',
-            )): vol.In({'off': '关闭 / Off',
-                        'reuse': '复用 Xiaomi Home / Reuse Xiaomi Home',
-                        'independent': '独立授权 / Independent authorization'}),
+            )): SelectSelector(SelectSelectorConfig(
+                options=['off', 'reuse', 'independent'], translation_key='scene_gateway_mode',
+            )),
             vol.Optional('renew_devices', default=user_input.get('renew_devices', False)): bool,
             vol.Optional('trans_options', default=user_input.get('trans_options', False)): bool,
             vol.Optional('disable_message', default=user_input.get('disable_message', False)): bool,

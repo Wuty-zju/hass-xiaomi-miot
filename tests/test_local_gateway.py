@@ -42,6 +42,9 @@ def _fake_gateway(publish_rc=0):
     gateway._ready.set()
     gateway._pending = {}
     gateway._next_id = 22
+    gateway._closed = False
+    gateway._started = False
+    gateway._connected = True
     publications = []
 
     def publish(topic, packet, qos):
@@ -116,3 +119,27 @@ def test_gateway_publish_exception_has_unknown_outcome():
         assert not gateway._pending
 
     asyncio.run(run())
+
+
+async def test_closed_client_cannot_restart_or_publish():
+    gateway, publications = _fake_gateway()
+    await gateway.close()
+    await gateway.close()
+    with pytest.raises(GatewayUnavailable):
+        await gateway.connect()
+    gateway._ready.set()  # A stale subscription must not bypass closure.
+    with pytest.raises(GatewayUnavailable):
+        await gateway.run_action_group('42')
+    assert not publications
+
+
+async def test_late_subscription_cannot_restore_disconnected_readiness():
+    gateway, _ = _fake_gateway()
+    gateway._connected = False
+    gateway._disconnected()
+    gateway._subscribed()
+    assert not gateway._ready.is_set()
+    gateway._connected = True
+    await gateway.close()
+    gateway._subscribed()
+    assert not gateway._ready.is_set()
