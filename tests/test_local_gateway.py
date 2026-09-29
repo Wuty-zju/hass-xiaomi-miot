@@ -6,6 +6,7 @@ import struct
 from types import SimpleNamespace
 
 import pytest
+import paho.mqtt.client as mqtt
 
 from custom_components.xiaomi_miot.core.local_gateway import (
     GatewayResultUnknown,
@@ -68,11 +69,25 @@ def test_gateway_request_uses_local_topic_and_correlates_reply():
     asyncio.run(run())
 
 
-def test_gateway_publish_rejection_is_pre_dispatch_failure():
+def test_gateway_publish_failure_is_not_safe_to_retry():
     async def run():
         gateway, _ = _fake_gateway(publish_rc=4)
-        with pytest.raises(GatewayUnavailable):
+        with pytest.raises(GatewayResultUnknown):
             await gateway.run_action_group('42')
+        assert not gateway._pending
+
+    asyncio.run(run())
+
+
+def test_real_paho_disconnected_publish_retains_the_command():
+    async def run():
+        gateway, _ = _fake_gateway()
+        gateway._client = mqtt.Client(
+            mqtt.CallbackAPIVersion.VERSION2, protocol=mqtt.MQTTv5,
+        )
+        with pytest.raises(GatewayResultUnknown):
+            await gateway.run_action_group('42')
+        assert len(gateway._client._out_messages) == 1
         assert not gateway._pending
 
     asyncio.run(run())

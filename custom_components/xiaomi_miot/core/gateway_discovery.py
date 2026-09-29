@@ -4,6 +4,7 @@ import asyncio
 import base64
 from dataclasses import dataclass
 import hashlib
+import logging
 import time
 
 from zeroconf import IPVersion, ServiceStateChange
@@ -11,6 +12,7 @@ from zeroconf.asyncio import AsyncServiceBrowser, AsyncServiceInfo
 
 
 SERVICE_TYPE = '_miot-central._tcp.local.'
+_LOGGER = logging.getLogger(__name__)
 
 
 def home_group_id(owner_uid: str, home_id: str) -> str:
@@ -59,8 +61,11 @@ class GatewayDiscovery:
         self._browser = None
         self._by_service = {}
         self._changed = asyncio.Event()
+        self._tasks = {}
+        self._closed = False
 
     async def start(self):
+        self._closed = False
         if self._browser is None:
             self._browser = AsyncServiceBrowser(
                 self._zeroconf, SERVICE_TYPE,
@@ -68,21 +73,41 @@ class GatewayDiscovery:
             )
 
     async def close(self):
+        self._closed = True
         if self._browser is not None:
             await self._browser.async_cancel()
             self._browser = None
+        tasks = list(self._tasks.values())
+        self._tasks.clear()
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         self._by_service.clear()
+        self._changed.set()
 
     def _service_changed(self, zeroconf, service_type, name, state):
+        if self._closed:
+            return
+        if task := self._tasks.pop(name, None):
+            task.cancel()
         if state == ServiceStateChange.Removed:
             self._by_service.pop(name, None)
             self._changed.set()
         else:
-            asyncio.create_task(self._refresh(service_type, name))
+            task = asyncio.create_task(self._refresh(service_type, name))
+            self._tasks[name] = task
+            task.add_done_callback(lambda done: self._refresh_done(name, done))
+
+    def _refresh_done(self, name, task):
+        if self._tasks.get(name) is task:
+            self._tasks.pop(name, None)
+        if not task.cancelled():
+            if error := task.exception():
+                _LOGGER.debug('Gateway discovery failed: %s', type(error).__name__)
 
     async def _refresh(self, service_type, name):
         info = AsyncServiceInfo(service_type, name)
-        if await info.async_request(self._zeroconf, timeout=3000):
+        if await info.async_request(self._zeroconf, timeout=3000) and not self._closed:
             address = parse_gateway_service(info)
             if address is not None:
                 self._by_service[name] = address
@@ -98,6 +123,8 @@ class GatewayDiscovery:
         """Allow a newly started browser time to receive an advertisement."""
         deadline = time.monotonic() + timeout
         while True:
+            if self._closed:
+                return None
             self._changed.clear()
             if address := self.for_group(group_id):
                 return address
