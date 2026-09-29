@@ -67,6 +67,7 @@ class LocalGatewayClient:
         self._pending = {}
         self._next_id = secrets.randbits(32)
         self._started = False
+        self._closed = False
 
         context = ssl.create_default_context(cafile=ca_file)
         context.load_cert_chain(cert_file, key_file)
@@ -86,14 +87,18 @@ class LocalGatewayClient:
         self._client.connect_async(host, port, keepalive=60)
 
     def _on_connect(self, client, userdata, flags, reason_code, properties):
-        if reason_code.is_failure:
+        if self._closed or reason_code.is_failure:
             return
         self._connected = True
         client.subscribe(self._reply_topic, qos=2)
 
     def _on_subscribe(self, client, userdata, mid, reason_codes, properties):
         if self._connected and all(not code.is_failure for code in reason_codes):
-            self._loop.call_soon_threadsafe(self._ready.set)
+            self._loop.call_soon_threadsafe(self._subscribed)
+
+    def _subscribed(self):
+        if not self._closed and self._connected:
+            self._ready.set()
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties):
         self._connected = False
@@ -122,6 +127,8 @@ class LocalGatewayClient:
 
     async def connect(self, timeout=10):
         """Wait until the reply subscription is active."""
+        if self._closed:
+            raise GatewayUnavailable('gateway client is closed')
         if not self._started:
             try:
                 self._client.loop_start()
@@ -132,10 +139,12 @@ class LocalGatewayClient:
             await asyncio.wait_for(self._ready.wait(), timeout)
         except TimeoutError as exc:
             raise GatewayUnavailable('gateway connection unavailable') from exc
+        if self._closed:
+            raise GatewayUnavailable('gateway client is closed')
 
     async def request(self, topic: str, payload: dict, timeout=10) -> dict:
         """Send a gateway request; a post-publish timeout is not retryable."""
-        if not self._ready.is_set():
+        if self._closed or not self._ready.is_set():
             raise GatewayUnavailable('gateway is not connected')
         self._next_id = (self._next_id + 1) & 0xffffffff
         while self._next_id in self._pending:
@@ -183,6 +192,10 @@ class LocalGatewayClient:
 
     async def close(self):
         """Stop the MQTT worker and fail any pending requests."""
+        if self._closed:
+            return
+        self._closed = True
+        self._connected = False
         self._disconnected()
         if self._started:
             self._client.disconnect()

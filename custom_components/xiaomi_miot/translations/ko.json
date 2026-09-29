@@ -1,4 +1,12 @@
 {
+    "selector": {
+        "gateway_auth_action": {
+            "options": {"existing": "기존 인증 사용", "renew": "다시 인증"}
+        },
+        "scene_gateway_mode": {
+            "options": {"off": "끄기", "reuse": "Xiaomi Home 연결 사용", "independent": "독립 인증"}
+        }
+    },
     "config": {
         "flow_title": "Xiaomi Miot",
         "step": {
