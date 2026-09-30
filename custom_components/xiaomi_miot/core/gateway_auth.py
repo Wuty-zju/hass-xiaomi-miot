@@ -132,7 +132,7 @@ async def exchange_token(session, region: str, client_id: str,
                            headers={'content-type': 'application/x-www-form-urlencoded'},
                            timeout=30) as response:
         result = await _read_api_response(response, 'OAuth token request')
-    token = result.get('result') if isinstance(result, dict) else None
+    token = result.get('result')
     if not isinstance(token, dict) or not all(
         token.get(key) for key in ('access_token', 'refresh_token', 'expires_in')
     ):
@@ -154,7 +154,7 @@ async def issue_gateway_certificate(session, region: str, client_id: str,
         headers=headers, timeout=30,
     ) as response:
         result = await _read_api_response(response, 'Gateway certificate request')
-    certificate = result.get('result') if isinstance(result, dict) else None
+    certificate = result.get('result')
     if not isinstance(certificate, dict):
         raise GatewayAuthorizationError('gateway certificate response invalid')
     pem = certificate.get('cert')
@@ -180,7 +180,7 @@ async def oauth_account_uid(session, region: str, client_id: str,
         'app_ver': 9,
     }, headers=headers, timeout=30) as response:
         result = await _read_api_response(response, 'OAuth account lookup')
-    data = result.get('result') if isinstance(result, dict) else None
+    data = result.get('result')
     homes = data.get('homelist') if isinstance(data, dict) else None
     if not isinstance(homes, list) or not homes:
         raise GatewayAuthorizationError('OAuth account has no owned home')

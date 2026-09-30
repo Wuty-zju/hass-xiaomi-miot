@@ -26,6 +26,7 @@ from .local_gateway import (
     GatewayResultUnknown,
     GatewayUnavailable,
     LocalGatewayClient,
+    gateway_ssl_context,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -161,10 +162,13 @@ class GatewayManager:
             _write_client_credentials, self._directory.name,
             credentials['certificate'], credentials['private_key'],
         )
-        client = LocalGatewayClient(
-            address.host, address.port, credentials['virtual_did'],
+        context = await self.hass.async_add_executor_job(
+            gateway_ssl_context,
             str(Path(__file__).with_name('mijia_gateway_ca.pem')),
             cert_file, key_file,
+        )
+        client = LocalGatewayClient(
+            address.host, address.port, credentials['virtual_did'], context,
         )
         self._clients[key] = client
         return client

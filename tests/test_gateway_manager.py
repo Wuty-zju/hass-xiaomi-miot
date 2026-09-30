@@ -3,8 +3,8 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
+import threading
 
 import pytest
 
@@ -41,37 +41,28 @@ def _manager(groups=None, result=None):
     return manager, gateway
 
 
-def test_gateway_manager_uses_exact_home_and_scene():
-    async def run():
-        manager, gateway = _manager()
-        assert await manager.run_scene(SCENE) is True
-        gateway.run_action_group.assert_awaited_once_with('42')
+async def test_gateway_manager_uses_exact_home_and_scene():
+    manager, gateway = _manager()
+    assert await manager.run_scene(SCENE) is True
+    gateway.run_action_group.assert_awaited_once_with('42')
 
-        with pytest.raises(GatewayUnavailable):
-            await manager.run_scene({**SCENE, 'home_id': 'other'})
-        assert gateway.run_action_group.await_count == 1
-
-    asyncio.run(run())
+    with pytest.raises(GatewayUnavailable):
+        await manager.run_scene({**SCENE, 'home_id': 'other'})
+    assert gateway.run_action_group.await_count == 1
 
 
-def test_gateway_manager_missing_group_is_safe_to_fallback():
-    async def run():
-        manager, gateway = _manager(groups=['other'])
-        with pytest.raises(GatewayUnavailable):
-            await manager.run_scene(SCENE)
-        gateway.run_action_group.assert_not_awaited()
-
-    asyncio.run(run())
+async def test_gateway_manager_missing_group_is_safe_to_fallback():
+    manager, gateway = _manager(groups=['other'])
+    with pytest.raises(GatewayUnavailable):
+        await manager.run_scene(SCENE)
+    gateway.run_action_group.assert_not_awaited()
 
 
-def test_gateway_manager_rejected_execution_is_not_retried():
-    async def run():
-        manager, gateway = _manager(result={'code': -1})
-        with pytest.raises(GatewayResultUnknown):
-            await manager.run_scene(SCENE)
-        assert gateway.run_action_group.await_count == 1
-
-    asyncio.run(run())
+async def test_gateway_manager_rejected_execution_is_not_retried():
+    manager, gateway = _manager(result={'code': -1})
+    with pytest.raises(GatewayResultUnknown):
+        await manager.run_scene(SCENE)
+    assert gateway.run_action_group.await_count == 1
 
 
 @pytest.mark.parametrize('days', [10, 1])
@@ -104,10 +95,24 @@ async def test_concurrent_gateway_creation_shares_one_client(hass, tmp_path):
     }
     address = GatewayAddress('789', 'home-group', '192.0.2.10', 8883)
     client = SimpleNamespace(close=AsyncMock())
-    with patch('custom_components.xiaomi_miot.core.gateway_manager.LocalGatewayClient', return_value=client) as factory:
+    loop_thread = threading.get_ident()
+    context = object()
+
+    def load_context(*args):
+        assert threading.get_ident() != loop_thread
+        return context
+
+    with patch('custom_components.xiaomi_miot.core.gateway_manager.LocalGatewayClient', return_value=client) as factory, patch(
+        'custom_components.xiaomi_miot.core.gateway_manager.gateway_ssl_context',
+        side_effect=load_context,
+    ) as load, patch.object(
+        hass, 'async_add_executor_job',
+        side_effect=lambda target, *args: asyncio.to_thread(target, *args),
+    ):
         clients = await asyncio.gather(manager._client_for(address), manager._client_for(address))
         assert clients == [client, client]
-        factory.assert_called_once()
+        factory.assert_called_once_with('192.0.2.10', 8883, 'virtual-id', context)
+        load.assert_called_once()
     manager._directory = None
     with pytest.raises(GatewayUnavailable):
         await manager._client_for(address)

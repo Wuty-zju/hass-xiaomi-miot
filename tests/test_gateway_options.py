@@ -20,6 +20,7 @@ def _flow():
         ),
         config_entry=SimpleNamespace(entry_id='miot', options={}),
         saved_config={'user_id': '1000', 'server_country': 'cn'},
+        _gateway_account_context=lambda: ('1000', 'cn'),
         async_step_cloud=AsyncMock(return_value={'step_id': 'cloud', 'errors': {
             'base': 'gateway_reuse_not_configured',
         }}),
@@ -30,71 +31,59 @@ def _flow():
     return flow
 
 
-def test_gateway_is_off_by_default_and_off_needs_no_other_integration():
-    async def run():
-        flow = _flow()
-        saved = await config_flow.OptionsFlowHandler._async_set_gateway_mode(
-            flow, 'off',
-        )
-        assert saved['data'][CONF_SCENE_GATEWAY_MODE] == 'off'
-
-    asyncio.run(run())
+async def test_gateway_is_off_by_default_and_off_needs_no_other_integration():
+    flow = _flow()
+    saved = await config_flow.OptionsFlowHandler._async_set_gateway_mode(
+        flow, 'off',
+    )
+    assert saved['data'][CONF_SCENE_GATEWAY_MODE] == 'off'
 
 
-def test_reuse_requires_official_integration_and_independent_prompts_auth(monkeypatch):
-    async def run():
-        flow = _flow()
-        result = await config_flow.OptionsFlowHandler._async_set_gateway_mode(flow, 'reuse')
-        assert result['errors']['base'] == 'gateway_reuse_not_configured'
+async def test_reuse_requires_official_integration_and_independent_prompts_auth(monkeypatch):
+    flow = _flow()
+    result = await config_flow.OptionsFlowHandler._async_set_gateway_mode(flow, 'reuse')
+    assert result['errors']['base'] == 'gateway_reuse_not_configured'
 
-        monkeypatch.setattr(config_flow, 'gateway_store', lambda *args: SimpleNamespace(
-            async_load=AsyncMock(return_value={}),
-        ))
-        result = await config_flow.OptionsFlowHandler._async_set_gateway_mode(flow, 'independent')
-        assert result['step_id'] == 'gateway_oauth'
-        flow.async_step_gateway_oauth.assert_awaited_once()
-
-    asyncio.run(run())
+    monkeypatch.setattr(config_flow, 'gateway_store', lambda *args: SimpleNamespace(
+        async_load=AsyncMock(return_value={}),
+    ))
+    result = await config_flow.OptionsFlowHandler._async_set_gateway_mode(flow, 'independent')
+    assert result['step_id'] == 'gateway_oauth'
+    flow.async_step_gateway_oauth.assert_awaited_once()
 
 
-def test_oauth_webhook_starts_one_exchange_immediately():
-    async def run():
-        flow = SimpleNamespace(
-            _gateway_state='expected', _gateway_auth_task=None,
-            _async_exchange_gateway_code=AsyncMock(),
-        )
-        flow._start_gateway_exchange = lambda code: config_flow.OptionsFlowHandler._start_gateway_exchange(flow, code)
-        flow._gateway_exchange_done = config_flow.OptionsFlowHandler._gateway_exchange_done
-        request = SimpleNamespace(query={'state': 'expected', 'code': 'one-time'})
-        callback = config_flow.OptionsFlowHandler._gateway_oauth_webhook
-        first = await callback(flow, None, 'hook', request)
-        second = await callback(flow, None, 'hook', request)
-        await flow._gateway_auth_task
+async def test_oauth_webhook_starts_one_exchange_immediately():
+    flow = SimpleNamespace(
+        _gateway_state='expected', _gateway_auth_task=None,
+        _async_exchange_gateway_code=AsyncMock(),
+    )
+    flow._start_gateway_exchange = lambda code: config_flow.OptionsFlowHandler._start_gateway_exchange(flow, code)
+    flow._gateway_exchange_done = config_flow.OptionsFlowHandler._gateway_exchange_done
+    request = SimpleNamespace(query={'state': 'expected', 'code': 'one-time'})
+    callback = config_flow.OptionsFlowHandler._gateway_oauth_webhook
+    first = await callback(flow, None, 'hook', request)
+    second = await callback(flow, None, 'hook', request)
+    await flow._gateway_auth_task
 
-        assert first.status == second.status == 200
-        flow._async_exchange_gateway_code.assert_awaited_once_with('one-time')
-
-    asyncio.run(run())
+    assert first.status == second.status == 200
+    flow._async_exchange_gateway_code.assert_awaited_once_with('one-time')
 
 
-def test_oauth_rejection_starts_new_authorization_instead_of_pending():
-    async def run():
-        async def rejected():
-            raise GatewayAuthorizationError('OAuth token request: Xiaomi code -6')
+async def test_oauth_rejection_starts_new_authorization_instead_of_pending():
+    async def rejected():
+        raise GatewayAuthorizationError('OAuth token request: Xiaomi code -6')
 
-        flow = _flow()
-        flow._gateway_webhook_id = 'hook'
-        flow._gateway_auth_task = asyncio.create_task(rejected())
-        flow._clear_gateway_webhook = lambda: setattr(flow, '_gateway_webhook_id', None)
-        flow.async_step_gateway_oauth = AsyncMock(return_value={'step_id': 'gateway_oauth'})
-        result = await config_flow.OptionsFlowHandler.async_step_gateway_oauth(flow, {})
+    flow = _flow()
+    flow._gateway_webhook_id = 'hook'
+    flow._gateway_auth_task = asyncio.create_task(rejected())
+    flow._clear_gateway_webhook = lambda: setattr(flow, '_gateway_webhook_id', None)
+    flow.async_step_gateway_oauth = AsyncMock(return_value={'step_id': 'gateway_oauth'})
+    result = await config_flow.OptionsFlowHandler.async_step_gateway_oauth(flow, {})
 
-        assert result['step_id'] == 'gateway_oauth'
-        flow.async_step_gateway_oauth.assert_awaited_once_with(
-            error='gateway_token_exchange_failed',
-        )
-
-    asyncio.run(run())
+    assert result['step_id'] == 'gateway_oauth'
+    flow.async_step_gateway_oauth.assert_awaited_once_with(
+        error='gateway_token_exchange_failed',
+    )
 
 
 @pytest.mark.parametrize('remove_flow', [False, True])

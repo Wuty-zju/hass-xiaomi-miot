@@ -1,7 +1,6 @@
 """Offline checks for independent gateway credentials."""
 
 import hashlib
-import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -43,7 +42,7 @@ def test_oauth_device_id_matches_xiaomi_home_derivation():
         oauth_device_id('', '12345', 'cn')
 
 
-def test_authorization_and_token_exchange_share_device_and_redirect():
+async def test_authorization_and_token_exchange_share_device_and_redirect():
     redirect = 'http://homeassistant.local:8123/api/webhook/12345'
     device = oauth_device_id('ha-instance', '12345', 'cn')
     auth_url, _ = authorize_url('123', redirect, device)
@@ -70,9 +69,9 @@ def test_authorization_and_token_exchange_share_device_and_redirect():
         captured.update(json.loads(kwargs['params']['data']))
         return Response()
 
-    asyncio.run(exchange_token(
+    await exchange_token(
         SimpleNamespace(get=get), 'cn', '123', redirect, device, code='fresh',
-    ))
+    )
     assert captured['client_id'] == int(auth['client_id'][0])
     assert captured['redirect_uri'] == auth['redirect_uri'][0]
     assert captured['device_id'] == auth['device_id'][0]
@@ -108,7 +107,7 @@ def test_bundled_gateway_ca_is_pinned():
     )
 
 
-def test_oauth_token_exchange_rejects_malformed_result():
+async def test_oauth_token_exchange_rejects_malformed_result():
     class Response:
         status = 200
         headers = {}
@@ -124,13 +123,13 @@ def test_oauth_token_exchange_rejects_malformed_result():
 
     session = SimpleNamespace(get=lambda *args, **kwargs: Response())
     with pytest.raises(GatewayAuthorizationError):
-        asyncio.run(exchange_token(
+        await exchange_token(
             session, 'cn', '123', 'http://homeassistant.local:8123/hook',
             'virtual-id', code='code',
-        ))
+        )
 
 
-def test_oauth_error_logs_only_numeric_fields():
+async def test_oauth_error_logs_only_numeric_fields():
     class Response:
         status = 200
         headers = {}
@@ -149,15 +148,15 @@ def test_oauth_error_logs_only_numeric_fields():
 
     session = SimpleNamespace(get=lambda *args, **kwargs: Response())
     with pytest.raises(GatewayAuthorizationError) as raised:
-        asyncio.run(exchange_token(
+        await exchange_token(
             session, 'cn', '123', 'http://homeassistant.local:8123/hook',
             'virtual-id', code='code',
-        ))
+        )
     assert 'Xiaomi code -6, error 96002' in str(raised.value)
     assert 'secret' not in str(raised.value)
 
 
-def test_certificate_endpoint_uses_bearer_grant():
+async def test_certificate_endpoint_uses_bearer_grant():
     calls = []
 
     class Response:
@@ -179,16 +178,16 @@ def test_certificate_endpoint_uses_bearer_grant():
         calls.append((url, kwargs))
         return Response()
 
-    certificate = asyncio.run(issue_gateway_certificate(
+    certificate = await issue_gateway_certificate(
         SimpleNamespace(post=post), 'cn', '123', 'token', 'csr',
-    ))
+    )
     assert certificate.startswith('-----BEGIN CERTIFICATE-----')
     assert calls[0][1]['headers']['Authorization'] == 'Bearertoken'
 
 
 @pytest.mark.parametrize('payload', [None, {'code': 0, 'result': None},
                                            {'code': 0, 'result': {'homelist': [None]}}])
-def test_account_lookup_rejects_malformed_response(payload):
+async def test_account_lookup_rejects_malformed_response(payload):
     class Response:
         status = 200
         headers = {}
@@ -204,10 +203,10 @@ def test_account_lookup_rejects_malformed_response(payload):
 
     session = SimpleNamespace(post=lambda *args, **kwargs: Response())
     with pytest.raises(GatewayAuthorizationError):
-        asyncio.run(oauth_account_uid(session, 'cn', '123', 'token'))
+        await oauth_account_uid(session, 'cn', '123', 'token')
 
 
-def test_oauth_accepts_json_with_text_plain_media_type():
+async def test_oauth_accepts_json_with_text_plain_media_type():
     class Response:
         status = 200
         headers = {'Content-Type': 'text/plain; charset=utf-8'}
@@ -224,15 +223,15 @@ def test_oauth_accepts_json_with_text_plain_media_type():
                 'expires_in': 3600,
             }})
 
-    token = asyncio.run(exchange_token(
+    token = await exchange_token(
         SimpleNamespace(get=lambda *args, **kwargs: Response()),
         'cn', '123', 'http://homeassistant.local:8123/hook',
         'virtual-id', code='one-time-code',
-    ))
+    )
     assert token['access_token'] == 'access'
 
 
-def test_oauth_rejects_plain_text_without_exposing_code():
+async def test_oauth_rejects_plain_text_without_exposing_code():
     class Response:
         status = 200
         headers = {'X-Xiaomi-Status-Code': '400'}
@@ -247,9 +246,9 @@ def test_oauth_rejects_plain_text_without_exposing_code():
             return 'one-time-secret-code'
 
     with pytest.raises(GatewayAuthorizationError, match='Xiaomi status 400') as exc:
-        asyncio.run(exchange_token(
+        await exchange_token(
             SimpleNamespace(get=lambda *args, **kwargs: Response()),
             'cn', '123', 'http://homeassistant.local:8123/hook',
             'virtual-id', code='one-time-secret-code',
-        ))
+        )
     assert 'one-time-secret-code' not in str(exc.value)

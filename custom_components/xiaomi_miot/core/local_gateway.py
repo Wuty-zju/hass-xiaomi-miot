@@ -56,10 +56,20 @@ def decode_message(data: bytes) -> tuple[int, str]:
     return message_id, payload
 
 
+def gateway_ssl_context(ca_file, cert_file, key_file) -> ssl.SSLContext:
+    """Load gateway credentials in an executor, not the event loop."""
+    context = ssl.create_default_context(cafile=ca_file)
+    context.load_cert_chain(cert_file, key_file)
+    # Xiaomi's CA predates OpenSSL's strict basic-constraints check.
+    # Keep normal certificate and hostname verification enabled.
+    context.verify_flags &= ~getattr(ssl, 'VERIFY_X509_STRICT', 0)
+    return context
+
+
 class LocalGatewayClient:
     """A reusable mTLS/MQTT connection scoped to one gateway identity."""
 
-    def __init__(self, host, port, did, ca_file, cert_file, key_file):
+    def __init__(self, host, port, did, context: ssl.SSLContext):
         self._loop = asyncio.get_running_loop()
         self._reply_topic = f'{did}/reply'
         self._ready = asyncio.Event()
@@ -69,11 +79,6 @@ class LocalGatewayClient:
         self._started = False
         self._closed = False
 
-        context = ssl.create_default_context(cafile=ca_file)
-        context.load_cert_chain(cert_file, key_file)
-        # Xiaomi's CA predates OpenSSL's strict basic-constraints check.
-        # Keep normal certificate and hostname verification enabled.
-        context.verify_flags &= ~getattr(ssl, 'VERIFY_X509_STRICT', 0)
         self._client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
             client_id=did,
@@ -150,29 +155,32 @@ class LocalGatewayClient:
         while self._next_id in self._pending:
             self._next_id = (self._next_id + 1) & 0xffffffff
         message_id = self._next_id
-        future = self._loop.create_future()
-        self._pending[message_id] = future
         packet = encode_message(
             message_id, json.dumps(payload, separators=(',', ':')),
             self._reply_topic,
         )
+        future = self._loop.create_future()
+        self._pending[message_id] = future
         try:
-            result = self._client.publish(f'master/{topic}', packet, qos=2)
-        except (OSError, ValueError) as exc:
-            self._pending.pop(message_id, None)
-            raise GatewayResultUnknown('gateway publish outcome unknown') from exc
-        if result.rc != mqtt.MQTT_ERR_SUCCESS:
-            self._pending.pop(message_id, None)
-            future.cancel()
-            # QoS 2 messages may remain queued even on MQTT_ERR_NO_CONN.
-            # A subsequent cloud execution could duplicate the local command.
-            raise GatewayResultUnknown('gateway publish outcome unknown')
-        try:
-            return json.loads(await asyncio.wait_for(future, timeout))
-        except (TimeoutError, UnicodeDecodeError, ValueError) as exc:
-            raise GatewayResultUnknown('gateway reply unavailable') from exc
+            try:
+                result = self._client.publish(f'master/{topic}', packet, qos=2)
+            except (OSError, ValueError) as exc:
+                raise GatewayResultUnknown('gateway publish outcome unknown') from exc
+            if result.rc != mqtt.MQTT_ERR_SUCCESS:
+                # QoS 2 messages may remain queued even on MQTT_ERR_NO_CONN.
+                # A subsequent cloud execution could duplicate the command.
+                raise GatewayResultUnknown('gateway publish outcome unknown')
+            try:
+                reply = json.loads(await asyncio.wait_for(future, timeout))
+            except (TimeoutError, UnicodeDecodeError, ValueError) as exc:
+                raise GatewayResultUnknown('gateway reply unavailable') from exc
+            if not isinstance(reply, dict):
+                raise GatewayResultUnknown('gateway reply is not an object')
+            return reply
         finally:
             self._pending.pop(message_id, None)
+            if not future.done():
+                future.cancel()
 
     async def action_groups(self) -> list[str]:
         reply = await self.request('proxy/getMijiaActionGroupList', {})
