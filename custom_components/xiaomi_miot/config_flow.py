@@ -1101,12 +1101,18 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
             webhook_async_unregister(self.hass, webhook_id)
             self._gateway_webhook_id = None
 
-    async def _async_exchange_gateway_code(self, code):
-        """Redeem an authorization code once, as soon as it arrives."""
+    def _gateway_account_context(self):
+        """Resolve one consistent account and region for gateway setup."""
         runtime = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id) or {}
         cloud = runtime.get(CONF_XIAOMI_CLOUD) if isinstance(runtime, dict) else None
-        uid = str(self.saved_config.get('user_id') or getattr(cloud, 'user_id', None))
-        region = self.saved_config.get(CONF_SERVER_COUNTRY, 'cn')
+        uid = self.saved_config.get('user_id') or getattr(cloud, 'user_id', None)
+        return str(uid) if uid else None, self.saved_config.get(CONF_SERVER_COUNTRY, 'cn')
+
+    async def _async_exchange_gateway_code(self, code):
+        """Redeem an authorization code once, as soon as it arrives."""
+        uid, region = self._gateway_account_context()
+        if not uid:
+            raise GatewayAuthorizationError('gateway account unavailable')
         session = async_get_clientsession(self.hass)
         token = await exchange_token(
             session, region, OAUTH_CLIENT_ID,
@@ -1138,15 +1144,13 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
 
     async def _async_set_gateway_mode(self, mode):
         """Apply the scene transport selected in the existing cloud form."""
-        runtime = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id) or {}
-        cloud = runtime.get(CONF_XIAOMI_CLOUD) if isinstance(runtime, dict) else None
-        account_uid = self.saved_config.get('user_id') or getattr(cloud, 'user_id', None)
+        account_uid, region = self._gateway_account_context()
         if not account_uid:
             return self.async_abort(reason='gateway_account_missing')
         if mode == 'reuse':
             _, reason = compatible_gateway(
                 self.hass, str(account_uid),
-                self.saved_config.get(CONF_SERVER_COUNTRY, 'cn'),
+                region,
             )
             if reason:
                 return await self.async_step_cloud(errors={
@@ -1157,7 +1161,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
                 self.hass, self.config_entry.entry_id,
             ).async_load() or {}
             if (str(stored.get('uid')) == str(account_uid)
-                    and stored.get('region') == self.saved_config.get(CONF_SERVER_COUNTRY, 'cn')
+                    and stored.get('region') == region
                     and all(stored.get(key) for key in (
                         'refresh_token', 'certificate', 'private_key',
                     ))):
@@ -1188,9 +1192,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
 
     async def async_step_gateway_oauth(self, user_input=None, error=None):
         """Authorize an independent identity for the local gateway."""
-        runtime = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id) or {}
-        cloud = runtime.get(CONF_XIAOMI_CLOUD) if isinstance(runtime, dict) else None
-        account_uid = self.saved_config.get('user_id') or getattr(cloud, 'user_id', None)
+        account_uid, region = self._gateway_account_context()
         if not account_uid:
             return self.async_abort(reason='gateway_account_missing')
         if not getattr(self, '_gateway_webhook_id', None):
@@ -1201,7 +1203,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
                 return self.async_abort(reason='gateway_instance_id_missing')
             self._gateway_oauth_device_id = oauth_device_id(
                 instance_id, self._gateway_virtual_did,
-                self.saved_config.get(CONF_SERVER_COUNTRY, 'cn'),
+                region,
             )
             self._gateway_webhook_id = self._gateway_virtual_did
             self._gateway_auth_task = None
