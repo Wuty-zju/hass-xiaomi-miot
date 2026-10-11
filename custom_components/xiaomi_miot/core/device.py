@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Optional, Callable
 from datetime import timedelta
 from functools import cached_property
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import TemplateError
 from homeassistant.const import CONF_HOST, CONF_TOKEN, CONF_MODEL, CONF_USERNAME, EntityCategory
 from homeassistant.util import dt
 from homeassistant.components import persistent_notification
@@ -38,6 +39,9 @@ from .utils import (
     get_value,
     DeviceException,
     is_offline_exception,
+    normalize_power_cost_value,
+    parse_power_cost_records,
+    power_cost_period,
     update_attrs_with_suffix,
 )
 from .templates import template
@@ -221,6 +225,40 @@ class Device(CustomConfigHelper):
 
         if not self._unsub_purge:
             self._unsub_purge = async_track_time_interval(self.hass, self.async_purge_entities, timedelta(hours=12))
+
+    async def async_refresh_local_device(self):
+        """Refresh a local device whose cloud-reported address may have changed."""
+        if not self.cloud or not self.info.did or not self.local or self._proxy_device:
+            return False
+
+        old_host = self.info.host
+        old_token = self.info.token
+        info = await self.entry.get_cloud_device(did=self.info.did, renew=True)
+        if not info:
+            return False
+
+        new_info = DeviceInfo({**self.info.data, **info})
+        if not new_info.host:
+            return False
+        if new_info.host == old_host and new_info.token == old_token:
+            return False
+
+        old_info = self.info
+        self.info = new_info
+        local = MiotDevice.from_device(self)
+        if not local:
+            self.info = old_info
+            return False
+        self.local = local
+        self._local_fails = 0
+        self._local_state = None
+        self.log.warning(
+            '%s: Refreshed local connection after address or token changed: %s -> %s',
+            self.name,
+            old_host,
+            self.info.host,
+        )
+        return True
 
     async def async_unload(self):
         for coo in self.coordinators:
@@ -923,6 +961,26 @@ class Device(CustomConfigHelper):
                 self.miot_results.set_results(results, mapping)
             except (DeviceException, OSError) as exc:
                 self._local_fails += 1
+                if self._local_fails >= 3:
+                    refreshed = False
+                    try:
+                        refreshed = await self.async_refresh_local_device()
+                    except Exception as refresh_exc:  # noqa: BLE001
+                        self.log.warning(
+                            '%s: Failed to refresh local connection: %s',
+                            self.name,
+                            refresh_exc,
+                        )
+                    if refreshed:
+                        return await self.update_miot_status(
+                            mapping=mapping,
+                            use_local=True,
+                            use_cloud=False,
+                            auto_cloud=auto_cloud,
+                            check_lan=check_lan,
+                            max_properties=max_properties,
+                            chunk_services=chunk_services,
+                        )
                 local_state = self._local_fails < 3
                 log = self.log.error
                 if is_offline_exception(exc):
@@ -1228,27 +1286,80 @@ class Device(CustomConfigHelper):
                 'time_end': now + 60,
                 'limit': int(c.get('limit') or 1),
             }
-            rdt = await self.cloud.async_request_api('v2/user/statistics', pms) or {}
-            self.log.info('Got micloud statistics: %s', rdt)
-            if tpl := c.get('template'):
-                tpl = template(tpl, self.hass)
-                rls = tpl.async_render(rdt)
+            power_cost = c.get('template') == 'micloud_statistics_power_cost'
+            missing = {'power_cost_today': None, 'power_cost_month': None}
+            try:
+                rdt = await self.cloud.async_request_api('v2/user/statistics', pms)
+            except (MiCloudException, TimeoutError):
+                self.log.debug('Cloud statistics request unavailable: %s', c['key'])
+                rdt = None
+            if power_cost and (
+                not isinstance(rdt, dict)
+                or rdt.get('code', 0) != 0
+                or not isinstance(rdt.get('result'), list)
+            ):
+                log = self.log.debug if rdt is None or rdt == {} else self.log.warning
+                log('Ignore invalid power statistics response: %s', c['key'])
+                rls = missing
+            elif tpl := c.get('template'):
+                if power_cost:
+                    rdt = {**rdt, 'result': parse_power_cost_records(rdt['result'])}
+                try:
+                    rls = template(tpl, self.hass).async_render(rdt or {})
+                except TemplateError:
+                    self.log.warning('Ignore invalid statistics template data: %s', c['key'])
+                    if not power_cost:
+                        continue
+                    rls = missing
             else:
                 rls = [
                     v.get('value')
-                    for v in rdt
+                    for v in (rdt or [])
                     if 'value' in v
                 ]
             if anm := c.get('attribute'):
                 attrs[anm] = rls
             elif isinstance(rls, dict):
+                # Reserve suffixes even when an earlier energy command failed.
                 update_attrs_with_suffix(attrs, rls)
+        attrs = self._filter_power_cost_statistics(attrs, dt.now())
         if attrs:
             self.available = True
             self.props.update(attrs)
             self.data['updated'] = dt.now()
             self.dispatch(self.decode_attrs(attrs))
         return attrs
+
+    def _filter_power_cost_statistics(self, attrs, now):
+        """Filter invalid and decreasing power cost statistics."""
+        result = dict(attrs)
+        periods = self.data.setdefault('_power_cost_periods', {})
+        for key in list(result):
+            period = power_cost_period(key, now)
+            if not period:
+                continue
+            value = normalize_power_cost_value(result[key])
+            if value is None:
+                result.pop(key)
+                continue
+            previous = normalize_power_cost_value(self.props.get(key))
+            if (
+                periods.get(key) == period
+                and previous is not None
+                and value < previous
+            ):
+                self.log.warning(
+                    'Ignore decreasing power cost in the same period: '
+                    '%s: %s -> %s, period=%s',
+                    key,
+                    previous,
+                    value,
+                    period,
+                )
+                result.pop(key)
+                continue
+            periods[key] = period
+        return result
 
     @cached_property
     def miio_cloud_records(self):
