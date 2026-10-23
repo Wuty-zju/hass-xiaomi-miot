@@ -218,6 +218,20 @@ class GatewayManager:
                 raise GatewayUnavailable('gateway manager is closed')
             return await self._create_client(address)
 
+    async def _credential_job(self, target, *args):
+        """Keep the credential lock until an uncancellable executor job ends."""
+        job = asyncio.ensure_future(self.hass.async_add_executor_job(target, *args))
+        completion = asyncio.gather(job, return_exceptions=True)
+        cancelled = False
+        while not completion.done():
+            try:
+                await asyncio.shield(completion)
+            except asyncio.CancelledError:
+                cancelled = True
+        if cancelled:
+            raise asyncio.CancelledError
+        return job.result()
+
     async def _create_client(self, address):
         key = (address.group_id, address.did, address.host, address.port)
         client = self._clients.get(key)
@@ -228,11 +242,11 @@ class GatewayManager:
                 await old_client.close()
                 self._clients.pop(old_key)
         credentials = self._credentials
-        cert_file, key_file = await self.hass.async_add_executor_job(
+        cert_file, key_file = await self._credential_job(
             _write_client_credentials, self._directory.name,
             credentials['certificate'], credentials['private_key'],
         )
-        context = await self.hass.async_add_executor_job(
+        context = await self._credential_job(
             gateway_ssl_context,
             str(Path(__file__).with_name('mijia_gateway_ca.pem')),
             cert_file, key_file,

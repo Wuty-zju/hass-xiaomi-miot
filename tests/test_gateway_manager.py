@@ -3,7 +3,7 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 import threading
 from dataclasses import replace
 
@@ -225,3 +225,38 @@ async def test_concurrent_gateway_creation_shares_one_client(hass, tmp_path):
     manager._directory = None
     with pytest.raises(GatewayUnavailable):
         await manager._client_for(address)
+
+
+async def test_cancelled_creation_finishes_credential_io_before_cleanup(hass, tmp_path):
+    manager = GatewayManager(hass, 'test-entry', SimpleNamespace())
+    cleanup = Mock()
+    manager._directory = SimpleNamespace(name=str(tmp_path), cleanup=cleanup)
+    manager._credentials = {'certificate': 'synthetic', 'private_key': 'synthetic', 'virtual_did': 'virtual'}
+    started, release = threading.Event(), threading.Event()
+
+    def write(*args):
+        started.set()
+        release.wait()
+        return 'synthetic-cert', 'synthetic-key'
+
+    with patch('custom_components.xiaomi_miot.core.gateway_manager._write_client_credentials',
+               side_effect=write), patch.object(hass, 'async_add_executor_job',
+               side_effect=lambda target, *args: asyncio.to_thread(target, *args)), patch(
+               'custom_components.xiaomi_miot.core.gateway_manager.LocalGatewayClient') as factory:
+        creating = asyncio.create_task(manager._client_for(GatewayAddress('1', 'group', '192.0.2.1', 8883)))
+        await asyncio.to_thread(started.wait)
+        creating.cancel()
+        closing = asyncio.create_task(manager.close())
+        try:
+            await asyncio.sleep(0)
+            creating.cancel()  # Repeated cancellation must not release the lock early.
+            await asyncio.sleep(0)
+            assert not closing.done()
+            cleanup.assert_not_called()
+        finally:
+            release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await creating
+        await closing
+    cleanup.assert_called_once()
+    factory.assert_not_called()
