@@ -33,6 +33,7 @@ async def test_registry_event_uses_public_lookup_and_preserves_disable(hass, mod
         name_by_user=None, disabled=True,
     )
     device.identifiers = identifiers
+    device.entry_type = None  # Ordinary HA DeviceEntry, not a scene SERVICE.
 
     class Registry:
         async_get = Mock(return_value=device if found else None)
