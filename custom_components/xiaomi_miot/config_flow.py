@@ -21,7 +21,7 @@ from homeassistant.util import yaml
 from homeassistant.components import persistent_notification
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.device_registry import format_mac
-from homeassistant.helpers.selector import ObjectSelector
+from homeassistant.helpers.selector import ObjectSelector, SelectSelector, SelectSelectorConfig
 
 from . import (
     DOMAIN,
@@ -1065,6 +1065,12 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
         errors = {}
         prev_input = self.saved_config
         if isinstance(user_input, dict):
+            user_input = dict(user_input)
+            self._pending_gateway_mode = user_input.pop('scene_gateway_mode', prev_input.get('scene_gateway_mode', 'off'))
+            if not user_input:
+                return self.async_create_entry(title='', data={
+                    **self.config_entry.options, 'scene_gateway_mode': self._pending_gateway_mode,
+                })
             user_input = {
                 **prev_input,
                 **user_input,
@@ -1100,6 +1106,8 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
             vol.Optional('disable_message', default=user_input.get('disable_message', False)): bool,
             vol.Optional('disable_scene_history', default=user_input.get('disable_scene_history', False)): bool,
             vol.Optional('disable_manual_scenes', default=user_input.get('disable_manual_scenes', False)): bool,
+            vol.Optional('scene_gateway_mode', default=prev_input.get('scene_gateway_mode', 'off')):
+                SelectSelector(SelectSelectorConfig(options=['off', 'reuse'], translation_key='scene_gateway_mode')),
         })
         return self.async_show_form(
             step_id='cloud',
@@ -1129,6 +1137,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
             })
             self.config_data.pop('filtering', None)
             self.config_data.pop('verify_ticket', None)
+            self.config_data.pop('scene_gateway_mode', None)
             if self.filter_models:
                 self.config_data.pop('filter_did', None)
                 self.config_data.pop('did_list', None)
@@ -1137,7 +1146,10 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
                 self.config_data.pop('model_list', None)
             self.hass.config_entries.async_update_entry(self.config_entry, data=self.config_data)
             _LOGGER.debug('Setup xiaomi cloud: %s', {**self.config_data, CONF_PASSWORD: '*', 'service_token': '*'})
-            return self.async_create_entry(title='', data={})
+            return self.async_create_entry(title='', data={
+                **self.config_entry.options,
+                'scene_gateway_mode': getattr(self, '_pending_gateway_mode', self.saved_config.get('scene_gateway_mode', 'off')),
+            })
         else:
             errors['base'] = 'unknown'
         return self.async_show_form(

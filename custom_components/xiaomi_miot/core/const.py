@@ -17,6 +17,7 @@ CONF_MODEL = 'model'
 CONF_XIAOMI_CLOUD = 'xiaomi_cloud'
 CONF_SERVER_COUNTRY = 'server_country'
 CONF_CONN_MODE = 'conn_mode'
+CONF_SCENE_GATEWAY_MODE = 'scene_gateway_mode'
 CONF_CONFIG_VERSION = 'config_version'
 
 DEFAULT_CONN_MODE = 'cloud'

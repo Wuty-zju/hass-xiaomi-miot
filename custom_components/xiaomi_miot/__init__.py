@@ -341,6 +341,11 @@ async def async_setup_xiaomi_cloud(hass: hass_core.HomeAssistant, config_entry: 
         config['configs'].append(cfg)
         _LOGGER.debug('Xiaomi cloud device: %s', {**cfg, CONF_TOKEN: '****'})
     hass.data[DOMAIN][entry_id] = config
+    if (hass_entry.get_config('scene_gateway_mode', 'off') == 'reuse'
+            and hass_entry.get_config(CONF_CONN_MODE) != 'cloud'
+            and not hass_entry.get_config('disable_manual_scenes', False)):
+        from .core.xiaomi_home_gateway import XiaomiHomeGateway
+        hass_entry.local_gateway = XiaomiHomeGateway(hass, str(cloud.user_id), cloud.default_server)
     return True
 
 

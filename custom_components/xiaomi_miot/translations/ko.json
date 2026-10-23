@@ -562,5 +562,13 @@
                 }
             }
         }
+    },
+    "selector": {
+        "scene_gateway_mode": {
+            "options": {
+                "off": "끄기",
+                "reuse": "Xiaomi Home 연결 사용"
+            }
+        }
     }
 }

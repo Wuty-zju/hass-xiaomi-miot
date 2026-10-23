@@ -194,7 +194,8 @@
                     "trans_options": "Translation property value description",
                     "disable_message": "Disable Mihome notification sensor",
                     "disable_scene_history": "Disable Mihome scene history sensor",
-                    "disable_manual_scenes": "Disable Xiaomi Home manual scene controls"
+                    "disable_manual_scenes": "Disable Xiaomi Home manual scene controls",
+                    "scene_gateway_mode": "Manual-scene local gateway source"
                 }
             },
             "cloud_filter": {
@@ -620,6 +621,14 @@
                     "name": "",
                     "description": ""
                 }
+            }
+        }
+    },
+    "selector": {
+        "scene_gateway_mode": {
+            "options": {
+                "off": "Off",
+                "reuse": "Reuse Xiaomi Home"
             }
         }
     }

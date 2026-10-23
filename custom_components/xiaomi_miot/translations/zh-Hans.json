@@ -137,7 +137,8 @@
                     "trans_options": "翻译属性值描述",
                     "disable_message": "禁用米家APP通知消息实体",
                     "disable_scene_history": "禁用米家场景历史实体",
-                    "disable_manual_scenes": "禁用米家场景手动控制"
+                    "disable_manual_scenes": "禁用米家场景手动控制",
+                    "scene_gateway_mode": "手动场景本地中枢来源"
                 }
             },
             "cloud_filter": {
@@ -623,6 +624,14 @@
                 "sid": {
                     "description": "小米服务ID"
                 }
+            }
+        }
+    },
+    "selector": {
+        "scene_gateway_mode": {
+            "options": {
+                "off": "关闭",
+                "reuse": "复用 Xiaomi Home"
             }
         }
     }

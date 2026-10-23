@@ -586,5 +586,13 @@
                 }
             }
         }
+    },
+    "selector": {
+        "scene_gateway_mode": {
+            "options": {
+                "off": "關閉",
+                "reuse": "沿用 Xiaomi Home"
+            }
+        }
     }
 }

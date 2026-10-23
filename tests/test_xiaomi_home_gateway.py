@@ -125,3 +125,71 @@ async def test_invalid_borrowed_reply_is_unknown_and_not_replayed(borrowed, repl
     with pytest.raises(GatewayResultUnknown):
         await snapshot.run(SCENE)
     assert local._MipsLocalClient__request_external.call_count == 1
+
+
+async def test_bridge_runs_through_account_background_route_without_new_lists(borrowed):
+    from custom_components.xiaomi_miot.core.gateway_scenes import GatewayScenes
+    backend, local, client, entry, loader, fingerprint = borrowed
+    qualified = asyncio.Event()
+    qualify = backend.qualify
+
+    async def read(home):
+        snapshot = await qualify(home)
+        qualified.set()
+        return snapshot
+
+    backend.qualify = AsyncMock(side_effect=read)
+    cloud = SimpleNamespace(unique_id='demo-cn', async_run_manual_scene=AsyncMock())
+    settings = {'conn_mode': 'auto', 'scene_gateway_mode': 'reuse'}
+    owner = SimpleNamespace(id='miot', hass=backend.hass, cloud=cloud, local_gateway=backend,
+                            get_config=lambda key, default=None: settings.get(key, default))
+    manager = GatewayScenes(owner)
+    manager._loaded = True
+    manager._scenes = {('123', '42'): {**SCENE, 'scene_name': 'Sleep', 'home_name': 'Home'}}
+    try:
+        manager.notify()
+        await qualified.wait()
+        assert manager.route(('123', '42')) == 'local'
+        await manager.async_run(('123', '42'))
+        assert backend.qualify.await_count == 1
+        cloud.async_run_manual_scene.assert_not_awaited()
+        assert local._MipsLocalClient__request_external.call_count == 1
+    finally:
+        await manager.async_close()
+    local.close.assert_not_awaited()
+
+
+async def test_cancelled_bridge_reply_is_ignored_without_replay(borrowed):
+    backend, local, client, entry, loader, fingerprint = borrowed
+    snapshot = await backend.qualify(SCENE)
+    sent = asyncio.Event()
+    received = []
+
+    def request(topic, payload, callback, **kwargs):
+        received.append((callback, kwargs['on_reply_ctx']))
+        sent.set()
+        return True
+
+    local._MipsLocalClient__request_external.side_effect = request
+    task = asyncio.create_task(snapshot.run(SCENE))
+    await sent.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert received[0][1].cancelled()
+    received[0][0]('{"result":{"code":1}}', received[0][1])
+    await asyncio.sleep(0)
+    assert local._MipsLocalClient__request_external.call_count == 1
+
+
+async def test_reuse_option_preserves_other_options_without_authentication():
+    from custom_components.xiaomi_miot.config_flow import OptionsFlowHandler
+    flow = SimpleNamespace(
+        saved_config={'scene_gateway_mode': 'off'},
+        config_entry=SimpleNamespace(options={'disable_message': True}),
+        async_create_entry=lambda **kwargs: kwargs,
+        check_xiaomi_account=AsyncMock(),
+    )
+    result = await OptionsFlowHandler.async_step_cloud(flow, {'scene_gateway_mode': 'reuse'})
+    assert result['data'] == {'disable_message': True, 'scene_gateway_mode': 'reuse'}
+    flow.check_xiaomi_account.assert_not_awaited()
