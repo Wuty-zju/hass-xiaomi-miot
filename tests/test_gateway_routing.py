@@ -16,6 +16,20 @@ SCENE = {'owner_uid': '1000', 'home_id': '123', 'scene_id': '42',
 KEY = ('123', '42')
 
 
+@pytest.mark.parametrize('mode', [None, 'cloud', 'auto', 'local'])
+@pytest.mark.parametrize('source', ['off', 'reuse', 'independent'])
+@pytest.mark.parametrize('disabled', [False, True])
+def test_scene_gateway_setup_and_background_share_the_configuration_gate(mode, source, disabled):
+    from custom_components.xiaomi_miot.core.scene_gateway import scene_gateway_enabled
+    settings = {'scene_gateway_mode': source, 'disable_manual_scenes': disabled}
+    if mode is not None:
+        settings['conn_mode'] = mode
+    entry = SimpleNamespace(get_config=lambda key, default=None: settings.get(key, default))
+    assert scene_gateway_enabled(entry) == (
+        mode in ('auto', 'local') and source != 'off' and not disabled
+    )
+
+
 @pytest.fixture
 async def buttons(hass):
     managers = []
