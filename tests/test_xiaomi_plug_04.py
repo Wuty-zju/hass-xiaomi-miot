@@ -26,6 +26,22 @@ from custom_components.xiaomi_miot.select import SelectEntity
 MODEL = "xiaomi.plug.04"
 
 
+def test_plug_04_chinese_select_translation_preserves_existing_entities():
+    def unique_object(items):
+        result = {}
+        for key, value in items:
+            assert key not in result, f'Duplicate translation key: {key}'
+            result[key] = value
+        return result
+
+    path = Path(__file__).parents[1] / 'custom_components/xiaomi_miot/translations/zh-Hans.json'
+    data = json.loads(path.read_text(), object_pairs_hook=unique_object)
+    selects = data['entity']['select']
+    assert selects['plug_04_power_on_behavior']['name'] == '上电恢复方式'
+    assert 'pet_drinking_fountain-mode' in selects
+    assert 'fan_control-fan_level' in selects
+
+
 async def test_plug_04_uses_cloud_daily_energy_without_local_counter(make_device, load_miot_spec, hass):
     spec = load_miot_spec("xiaomi.plug.04.json")
     device = make_device(spec, model=MODEL)
