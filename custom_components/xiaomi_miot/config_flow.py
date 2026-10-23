@@ -81,7 +81,7 @@ from .core.gateway_auth import (
     validate_gateway_certificate,
 )
 from .core.gateway_manager import gateway_store
-from .core.xiaomi_home_gateway import compatible_gateway
+from .core.xiaomi_home_gateway import configured_home_account
 
 _LOGGER = logging.getLogger(__name__)
 DEFAULT_INTERVAL = 30
@@ -1148,7 +1148,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
         if not account_uid:
             return self.async_abort(reason='gateway_account_missing')
         if mode == 'reuse':
-            _, reason = compatible_gateway(
+            _, reason = configured_home_account(
                 self.hass, str(account_uid),
                 region,
             )
@@ -1361,6 +1361,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
             vol.Optional('trans_options', default=user_input.get('trans_options', False)): bool,
             vol.Optional('disable_message', default=user_input.get('disable_message', False)): bool,
             vol.Optional('disable_scene_history', default=user_input.get('disable_scene_history', False)): bool,
+            vol.Optional('disable_manual_scenes', default=user_input.get('disable_manual_scenes', False)): bool,
         })
         return self.async_show_form(
             step_id='cloud',

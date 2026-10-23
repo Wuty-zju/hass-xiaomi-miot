@@ -1,6 +1,7 @@
 """Account-scoped, independent Xiaomi central-gateway scene transport."""
 
 import asyncio
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import logging
 import os
@@ -24,12 +25,72 @@ from .gateway_auth import (
 from .gateway_discovery import GatewayDiscovery, home_group_id
 from .local_gateway import (
     GatewayResultUnknown,
+    GatewayRejected,
     GatewayUnavailable,
     LocalGatewayClient,
     gateway_ssl_context,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _home_scope(scene):
+    if not isinstance(scene, dict):
+        raise GatewayUnavailable('invalid gateway home scope')
+    values = tuple(scene.get(key) for key in ('owner_uid', 'home_id'))
+    if any(type(value) not in (str, int) or not str(value).strip() for value in values):
+        raise GatewayUnavailable('invalid gateway home scope')
+    return tuple(str(value) for value in values)
+
+
+@dataclass(frozen=True)
+class GatewaySceneSnapshot:
+    """Ephemeral authorization from one exact gateway connection, never stored."""
+
+    manager: 'GatewayManager'
+    client: LocalGatewayClient
+    address: object
+    account: tuple
+    scope: tuple
+    session: int
+    groups: frozenset
+    expires: float
+
+    def watch(self, callback):
+        unwatch_client = self.client.watch_state(callback)
+        unwatch_discovery = self.manager._discovery.watch(self.address.group_id, callback)
+
+        def unsubscribe():
+            unwatch_client()
+            unwatch_discovery()
+
+        return unsubscribe
+
+    def available(self, scene):
+        manager = self.manager
+        try:
+            scope = _home_scope(scene)
+        except GatewayUnavailable:
+            return False
+        return (scope == self.scope and type(scene.get('scene_id')) in (str, int)
+                and str(scene['scene_id']) in self.groups
+                and not manager._closed and manager._discovery is not None
+                and manager.account == self.account
+                and manager.hass.loop.time() < self.expires
+                and manager._discovery.for_group(self.address.group_id) == self.address
+                and self.client.session == self.session)
+
+    async def run(self, scene):
+        """No discovery, certificate or list I/O is permitted at dispatch."""
+        if not self.available(scene):
+            raise GatewayUnavailable('gateway qualification is no longer current')
+        result = await self.client.run_action_group(str(scene['scene_id']), session=self.session)
+        if (not isinstance(result, dict) or 'error' in result
+                or type(result.get('code')) is not int):
+            raise GatewayResultUnknown('gateway execution response is invalid')
+        if result['code'] not in (0, 1):
+            raise GatewayRejected('gateway rejected scene execution')
+        return True
 
 
 def gateway_store(hass, entry_id):
@@ -62,6 +123,11 @@ class GatewayManager:
         self._clients = {}
         self._directory = None
         self._credential_lock = asyncio.Lock()
+        self._closed = False
+
+    @property
+    def account(self):
+        return str(self.cloud.user_id), self.cloud.default_server
 
     async def start(self):
         self._credentials = await self._store.async_load()
@@ -75,6 +141,8 @@ class GatewayManager:
         await self._discovery.start()
 
     async def close(self):
+        # Revoke snapshots before waiting for credential/client cleanup.
+        self._closed = True
         async with self._credential_lock:
             await self._close()
 
@@ -91,6 +159,8 @@ class GatewayManager:
 
     async def _ensure_certificate(self):
         async with self._credential_lock:
+            if self._closed:
+                raise GatewayUnavailable('gateway manager is closed')
             credentials = self._credentials
             if (not credentials
                     or str(credentials.get('uid')) != str(self.cloud.user_id)
@@ -144,12 +214,12 @@ class GatewayManager:
         # Coordinate creation with credential rotation and unload, including
         # the executor write which otherwise lets concurrent callers race.
         async with self._credential_lock:
-            if self._directory is None:
+            if self._closed or self._directory is None:
                 raise GatewayUnavailable('gateway manager is closed')
             return await self._create_client(address)
 
     async def _create_client(self, address):
-        key = (address.group_id, address.host, address.port)
+        key = (address.group_id, address.did, address.host, address.port)
         client = self._clients.get(key)
         if client:
             return client
@@ -173,29 +243,30 @@ class GatewayManager:
         self._clients[key] = client
         return client
 
-    async def run_scene(self, scene) -> bool:
-        """Try local execution; raise before dispatch if cloud fallback is safe."""
-        if not self._discovery:
+    async def qualify(self, home, timeout=15) -> GatewaySceneSnapshot:
+        """Read-only background qualification, bounded across all setup stages."""
+        if self._closed or not self._discovery:
             raise GatewayUnavailable('gateway OAuth is not configured')
-        group_id = home_group_id(str(scene['owner_uid']), str(scene['home_id']))
-        address = await self._discovery.wait_for_group(group_id)
-        if not address:
-            raise GatewayUnavailable('no central gateway found for scene home')
+        scope = _home_scope(home)
+        account = self.account
+        group_id = home_group_id(*scope)
+        deadline = self.hass.loop.time() + timeout
         try:
-            await self._ensure_certificate()
-        except (GatewayAuthorizationError, aiohttp.ClientError,
-                TimeoutError, ValueError, KeyError) as exc:
-            raise GatewayUnavailable('gateway credentials unavailable') from exc
-        scene_id = str(scene['scene_id'])
-        try:
-            client = await self._client_for(address)
-            await client.connect()
-            groups = await client.action_groups()
-        except (GatewayUnavailable, GatewayResultUnknown, OSError) as exc:
-            raise GatewayUnavailable('gateway scene list unavailable') from exc
-        if scene_id not in groups:
-            raise GatewayUnavailable('scene not available on the local gateway')
-        result = await client.run_action_group(scene_id)
-        if result.get('code') in (0, 1):
-            return True
-        raise GatewayResultUnknown('gateway did not confirm scene execution')
+            async with asyncio.timeout(timeout):
+                address = await self._discovery.wait_for_group(group_id)
+                if not address:
+                    raise GatewayUnavailable('no central gateway found for scene home')
+                await self._ensure_certificate()
+                client = await self._client_for(address)
+                await client.connect(max(0, deadline - self.hass.loop.time()))
+                session = client.session
+                groups = await client.action_groups(max(0, deadline - self.hass.loop.time()))
+                if (self._closed or self.account != account or session is None
+                        or client.session != session
+                        or self._discovery.for_group(group_id) != address):
+                    raise GatewayUnavailable('gateway changed while reading scene list')
+        except (GatewayAuthorizationError, aiohttp.ClientError, GatewayResultUnknown,
+                TimeoutError, OSError, ValueError, KeyError) as exc:
+            raise GatewayUnavailable('gateway scene qualification unavailable') from exc
+        return GatewaySceneSnapshot(self, client, address, account, scope, session,
+                                    frozenset(groups), self.hass.loop.time() + 600)

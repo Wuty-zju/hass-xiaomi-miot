@@ -3,7 +3,7 @@
 import base64
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch, AsyncMock
 
 from zeroconf import ServiceStateChange
 
@@ -90,3 +90,26 @@ async def test_removed_service_cancels_its_pending_refresh():
     assert task.cancelled()
     assert not discovery.gateways
     await discovery.close()
+
+
+async def test_group_watch_notifies_changed_endpoint_and_removal_without_waiting():
+    discovery = GatewayDiscovery(None)
+    notify, unrelated = Mock(), Mock()
+    unsubscribe = discovery.watch('0102030405060708', notify)
+    discovery.watch('other', unrelated)
+    info = _advertisement()
+    info.async_request = AsyncMock(return_value=True)
+    with patch('custom_components.xiaomi_miot.core.gateway_discovery.AsyncServiceInfo', return_value=info):
+        await discovery._refresh(SERVICE_TYPE, 'service')
+        notify.assert_called_once()
+        await discovery._refresh(SERVICE_TYPE, 'service')
+        assert notify.call_count == 1  # Unchanged periodic advertisement.
+        info.parsed_addresses = lambda version: ['192.0.2.11']
+        await discovery._refresh(SERVICE_TYPE, 'service')
+    assert notify.call_count == 2
+    unrelated.assert_not_called()
+    discovery._service_changed(None, SERVICE_TYPE, 'service', ServiceStateChange.Removed)
+    assert notify.call_count == 3 and discovery.for_group('0102030405060708') is None
+    unsubscribe()
+    await discovery.close()
+    assert notify.call_count == 3 and not discovery._watchers
