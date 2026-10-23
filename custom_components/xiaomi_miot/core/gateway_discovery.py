@@ -57,6 +57,25 @@ class GatewayDiscovery:
         self._changed = asyncio.Event()
         self._tasks = {}
         self._closed = False
+        self._watchers = {}
+
+    def watch(self, group_id, callback):
+        listeners = self._watchers.setdefault(group_id, set())
+        listeners.add(callback)
+
+        def unsubscribe():
+            listeners.discard(callback)
+            if not listeners and self._watchers.get(group_id) is listeners:
+                self._watchers.pop(group_id)
+
+        return unsubscribe
+
+    def _notify(self, group_id=None):
+        self._changed.set()
+        groups = list(self._watchers) if group_id is None else [group_id]
+        for group in groups:
+            for callback in list(self._watchers.get(group, ())):
+                callback()
 
     async def start(self):
         self._closed = False
@@ -77,7 +96,8 @@ class GatewayDiscovery:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         self._by_service.clear()
-        self._changed.set()
+        self._notify()
+        self._watchers.clear()
 
     def _service_changed(self, zeroconf, service_type, name, state):
         if self._closed:
@@ -85,8 +105,8 @@ class GatewayDiscovery:
         if task := self._tasks.pop(name, None):
             task.cancel()
         if state == ServiceStateChange.Removed:
-            self._by_service.pop(name, None)
-            self._changed.set()
+            old = self._by_service.pop(name, None)
+            self._notify(old.group_id if old else None)
         else:
             task = asyncio.create_task(self._refresh(service_type, name))
             self._tasks[name] = task
@@ -104,8 +124,12 @@ class GatewayDiscovery:
         if await info.async_request(self._zeroconf, timeout=3000) and not self._closed:
             address = parse_gateway_service(info)
             if address is not None:
+                old = self._by_service.get(name)
                 self._by_service[name] = address
-                self._changed.set()
+                if old != address:
+                    if old and old.group_id != address.group_id:
+                        self._notify(old.group_id)
+                    self._notify(address.group_id)
 
     def for_group(self, group_id: str) -> GatewayAddress | None:
         """Find a gateway for one exact home group."""

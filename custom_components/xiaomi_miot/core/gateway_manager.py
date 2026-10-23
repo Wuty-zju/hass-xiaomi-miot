@@ -57,7 +57,14 @@ class GatewaySceneSnapshot:
     expires: float
 
     def watch(self, callback):
-        return self.client.watch_state(callback)
+        unwatch_client = self.client.watch_state(callback)
+        unwatch_discovery = self.manager._discovery.watch(self.address.group_id, callback)
+
+        def unsubscribe():
+            unwatch_client()
+            unwatch_discovery()
+
+        return unsubscribe
 
     def available(self, scene):
         manager = self.manager
