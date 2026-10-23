@@ -36,6 +36,7 @@ class HassEntry:
         self._cloud_devices_lock = asyncio.Lock()
         self._cloud_devices_updated = 0.0
         self.manual_scenes = None
+        self.local_gateway = None
 
     @staticmethod
     def init(hass: HomeAssistant, entry: ConfigEntry):

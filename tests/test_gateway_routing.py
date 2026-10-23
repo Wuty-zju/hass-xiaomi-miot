@@ -9,7 +9,7 @@ from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.xiaomi_miot.button import ManualSceneButton
 from custom_components.xiaomi_miot.core.gateway_scenes import GatewayScenes
-from custom_components.xiaomi_miot.core.local_gateway import GatewayResultUnknown, GatewayUnavailable
+from custom_components.xiaomi_miot.core.scene_gateway import GatewayResultUnknown, GatewayUnavailable
 
 SCENE = {'owner_uid': '1000', 'home_id': '123', 'scene_id': '42',
          'scene_name': 'Sleep', 'home_name': 'Home'}
@@ -161,7 +161,7 @@ async def test_ha_stop_cancels_workers_and_closes_owned_backend(buttons):
 
 
 async def test_explicit_local_rejection_is_not_unknown_or_replayed(buttons):
-    from custom_components.xiaomi_miot.core.local_gateway import GatewayRejected
+    from custom_components.xiaomi_miot.core.scene_gateway import GatewayRejected
     button, cloud, backend, snapshot = await buttons()
     snapshot.run.side_effect = GatewayRejected('rejected')
     with pytest.raises(HomeAssistantError) as exc:

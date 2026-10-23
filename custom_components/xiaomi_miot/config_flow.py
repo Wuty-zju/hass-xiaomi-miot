@@ -81,7 +81,7 @@ from .core.gateway_auth import (
     validate_gateway_certificate,
 )
 from .core.gateway_manager import gateway_store
-from .core.xiaomi_home_gateway import compatible_gateway
+from .core.xiaomi_home_gateway import configured_home_account
 
 _LOGGER = logging.getLogger(__name__)
 DEFAULT_INTERVAL = 30
@@ -1148,7 +1148,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow, BaseFlowHandler):
         if not account_uid:
             return self.async_abort(reason='gateway_account_missing')
         if mode == 'reuse':
-            _, reason = compatible_gateway(
+            _, reason = configured_home_account(
                 self.hass, str(account_uid),
                 region,
             )

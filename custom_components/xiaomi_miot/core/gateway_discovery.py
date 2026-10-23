@@ -3,22 +3,16 @@
 import asyncio
 import base64
 from dataclasses import dataclass
-import hashlib
 import logging
 import time
 
 from zeroconf import IPVersion, ServiceStateChange
 from zeroconf.asyncio import AsyncServiceBrowser, AsyncServiceInfo
+from .scene_gateway import home_group_id
 
 
 SERVICE_TYPE = '_miot-central._tcp.local.'
 _LOGGER = logging.getLogger(__name__)
-
-
-def home_group_id(owner_uid: str, home_id: str) -> str:
-    """Derive the local MQTT group advertised for a Xiaomi home."""
-    value = f'{owner_uid}central_service{home_id}'.encode()
-    return hashlib.sha1(value).hexdigest()[:16]
 
 
 @dataclass(frozen=True)

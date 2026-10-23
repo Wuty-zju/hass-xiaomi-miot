@@ -8,7 +8,7 @@ import asyncio
 import logging
 
 from .const import CONF_CONN_MODE, CONF_SCENE_GATEWAY_MODE
-from .local_gateway import GatewayRejected, GatewayResultUnknown, GatewayUnavailable
+from .scene_gateway import GatewayRejected, GatewayResultUnknown, GatewayUnavailable
 from .manual_scenes import ManualScenes, scene_error, scene_key
 
 _LOGGER = logging.getLogger(__name__)

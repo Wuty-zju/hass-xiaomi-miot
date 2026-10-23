@@ -12,18 +12,7 @@ import struct
 from threading import RLock
 
 import paho.mqtt.client as mqtt
-
-
-class GatewayUnavailable(Exception):
-    """The request was not sent to a connected gateway."""
-
-
-class GatewayResultUnknown(Exception):
-    """A sent request has no trustworthy completion result."""
-
-
-class GatewayRejected(GatewayResultUnknown):
-    """The gateway explicitly rejected a dispatched action; never replay it."""
+from .scene_gateway import GatewayUnavailable, GatewayResultUnknown, GatewayRejected
 
 
 def _scene_id(value):
