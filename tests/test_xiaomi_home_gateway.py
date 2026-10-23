@@ -182,6 +182,15 @@ async def test_cancelled_bridge_reply_is_ignored_without_replay(borrowed):
     assert local._MipsLocalClient__request_external.call_count == 1
 
 
+async def test_closed_borrowed_worker_reports_unknown_without_replay(borrowed):
+    backend, local, client, entry, loader, fingerprint = borrowed
+    snapshot = await backend.qualify(SCENE)
+    local._MipsLocalClient__request_external.side_effect = RuntimeError('worker closed')
+    with pytest.raises(GatewayResultUnknown):
+        await snapshot.run(SCENE)
+    assert local._MipsLocalClient__request_external.call_count == 1
+
+
 async def test_reuse_option_preserves_other_options_without_authentication():
     from custom_components.xiaomi_miot.config_flow import OptionsFlowHandler
     flow = SimpleNamespace(

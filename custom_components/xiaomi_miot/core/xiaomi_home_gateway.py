@@ -199,7 +199,7 @@ class XiaomiHomeGateway:
                     or ('code' in reply and (type(reply['code']) is not int or reply['code'] != 0))):
                 raise GatewayResultUnknown('borrowed gateway response is invalid')
             return reply
-        except (OSError, TimeoutError, ValueError, TypeError) as exc:
+        except (OSError, TimeoutError, ValueError, TypeError, RuntimeError) as exc:
             raise GatewayResultUnknown('borrowed gateway result unknown') from exc
         finally:
             if not future.done():
