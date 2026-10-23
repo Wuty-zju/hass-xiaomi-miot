@@ -175,6 +175,16 @@ class LocalGatewayClient:
                 return self._generation
         return None
 
+    def watch_state(self, callback):
+        """One home worker observes this owned connection on the HA loop."""
+        self._on_state = callback
+
+        def unsubscribe():
+            if self._on_state is callback:
+                self._on_state = None
+
+        return unsubscribe
+
     def _on_message(self, client, userdata, message):
         if message.topic != self._reply_topic:
             return

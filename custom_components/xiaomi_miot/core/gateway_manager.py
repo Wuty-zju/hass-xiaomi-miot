@@ -56,6 +56,9 @@ class GatewaySceneSnapshot:
     groups: frozenset
     expires: float
 
+    def watch(self, callback):
+        return self.client.watch_state(callback)
+
     def available(self, scene):
         manager = self.manager
         try:
@@ -260,8 +263,3 @@ class GatewayManager:
             raise GatewayUnavailable('gateway scene qualification unavailable') from exc
         return GatewaySceneSnapshot(self, client, address, account, scope, session,
                                     frozenset(groups), self.hass.loop.time() + 600)
-
-    async def run_scene(self, scene) -> bool:
-        """Compatibility entry point until account routing owns qualification."""
-        snapshot = await self.qualify(scene)
-        return await snapshot.run(scene)

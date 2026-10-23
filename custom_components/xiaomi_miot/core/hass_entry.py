@@ -35,6 +35,7 @@ class HassEntry:
         self.cloud_devices = None
         self._cloud_devices_lock = asyncio.Lock()
         self._cloud_devices_updated = 0.0
+        self.manual_scenes = None
 
     @staticmethod
     def init(hass: HomeAssistant, entry: ConfigEntry):
@@ -54,6 +55,9 @@ class HassEntry:
             )
         )
         if ret:
+            if self.manual_scenes:
+                await self.manual_scenes.async_close()
+                self.manual_scenes = None
             if self.local_gateway:
                 await self.local_gateway.close()
                 self.local_gateway = None
@@ -120,6 +124,12 @@ class HassEntry:
             device.add_entities(domain)
 
         return self
+
+    def get_manual_scenes(self):
+        if self.manual_scenes is None:
+            from .gateway_scenes import GatewayScenes
+            self.manual_scenes = GatewayScenes(self)
+        return self.manual_scenes
 
     @property
     def cloud(self):

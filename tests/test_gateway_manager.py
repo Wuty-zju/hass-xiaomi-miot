@@ -49,25 +49,28 @@ def _manager(hass, groups=None, result=None):
 
 async def test_gateway_manager_uses_exact_home_and_scene(hass):
     manager, gateway = _manager(hass)
-    assert await manager.run_scene(SCENE) is True
+    snapshot = await manager.qualify(SCENE)
+    assert await snapshot.run(SCENE) is True
     gateway.run_action_group.assert_awaited_once_with('42', session=1)
 
     with pytest.raises(GatewayUnavailable):
-        await manager.run_scene({**SCENE, 'home_id': 'other'})
+        await snapshot.run({**SCENE, 'home_id': 'other'})
     assert gateway.run_action_group.await_count == 1
 
 
 async def test_gateway_manager_missing_group_is_safe_to_fallback(hass):
     manager, gateway = _manager(hass, groups=['other'])
     with pytest.raises(GatewayUnavailable):
-        await manager.run_scene(SCENE)
+        snapshot = await manager.qualify(SCENE)
+        await snapshot.run(SCENE)
     gateway.run_action_group.assert_not_awaited()
 
 
 async def test_gateway_manager_rejected_execution_is_not_retried(hass):
     manager, gateway = _manager(hass, result={'code': -1})
     with pytest.raises(GatewayResultUnknown):
-        await manager.run_scene(SCENE)
+        snapshot = await manager.qualify(SCENE)
+        await snapshot.run(SCENE)
     assert gateway.run_action_group.await_count == 1
 
 
