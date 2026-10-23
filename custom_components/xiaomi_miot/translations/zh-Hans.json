@@ -397,6 +397,9 @@
             }
         },
         "select": {
+            "plug_04_power_on_behavior": {
+                "name": "上电恢复方式"
+            },
             "pet_drinking_fountain-mode": {
                 "name": "出水模式"
             },
@@ -470,11 +473,6 @@
             },
             "plug_04_energy_alert_enable": {
                 "name": "用电超限提醒启用"
-            }
-        },
-        "select": {
-            "plug_04_power_on_behavior": {
-                "name": "上电恢复方式"
             }
         },
         "number": {
