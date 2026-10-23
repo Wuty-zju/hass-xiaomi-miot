@@ -8,7 +8,7 @@ import asyncio
 import logging
 
 from .const import CONF_CONN_MODE, CONF_SCENE_GATEWAY_MODE
-from .scene_gateway import GatewayRejected, GatewayResultUnknown, GatewayUnavailable
+from .scene_gateway import GatewayRejected, GatewayResultUnknown, GatewayUnavailable, scene_gateway_enabled
 from .manual_scenes import ManualScenes, scene_error, scene_key
 
 _LOGGER = logging.getLogger(__name__)
@@ -24,8 +24,7 @@ class GatewayScenes(ManualScenes):
 
     @property
     def gateway_enabled(self):
-        return (self.enabled and self.entry.get_config(CONF_CONN_MODE, 'cloud') != 'cloud'
-                and self.entry.get_config(CONF_SCENE_GATEWAY_MODE, 'off') in ('independent', 'reuse'))
+        return self.enabled and scene_gateway_enabled(self.entry)
 
     def _snapshot(self, scene):
         backend = getattr(self.entry, 'local_gateway', None)
