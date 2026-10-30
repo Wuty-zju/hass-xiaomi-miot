@@ -16,12 +16,15 @@ jobs:
       - name: 🐍 Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: requirements_test.txt
 
       - name: 📦 Install test dependencies
         run: pip install -r requirements_test.txt
+
+      - name: Record resolved Home Assistant version
+        run: python -c "import sys; from importlib.metadata import version; print(sys.version); print('Home Assistant', version('homeassistant')); print('pytest fixture', version('pytest-homeassistant-custom-component'))"
 
       - name: 🧪 Run focused tests
         run: python -m pytest -q
