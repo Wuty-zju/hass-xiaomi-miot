@@ -42,9 +42,10 @@ PROPERTY_IDS = {
 
 @pytest.fixture
 def plug_device(hass, make_device, load_miot_spec):
-    async def create(mode="auto", translations=None):
-        raw = copy.deepcopy(load_miot_spec("xiaomi.plug.04.json").raw)
-        spec = MiotSpec(hass, raw, translations=translations)
+    async def create(mode="auto", translations=None, spec=None):
+        if spec is None:
+            raw = copy.deepcopy(load_miot_spec("xiaomi.plug.04.json").raw)
+            spec = MiotSpec(hass, raw, translations=translations)
         path = Path("custom_components/xiaomi_miot/core/miot_specs_extend.json")
         extension = json.loads(path.read_text(encoding="utf-8"))[MODEL]
         device = make_device(spec, model=MODEL, customizes={
@@ -60,6 +61,16 @@ def plug_device(hass, make_device, load_miot_spec):
         assert device.conn_mode == mode
         return device
     return create
+
+
+@pytest.mark.parametrize("order", [("auto", "cloud"), ("cloud", "auto")])
+async def test_local_spec_extension_does_not_change_another_entries_cached_spec(plug_device, load_miot_spec, order):
+    spec = load_miot_spec("xiaomi.plug.04.json")
+    devices = {mode: await plug_device(mode, spec=spec) for mode in order}
+    key = "prop.4.8"
+    assert spec.specs[key].desc_name == "on_off"
+    assert devices["cloud"].spec.specs[key].desc_name == "on_off"
+    assert devices["auto"].spec.specs[key].desc_name == "charging_protection"
 
 
 def on_off_entities(device):

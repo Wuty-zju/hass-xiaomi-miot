@@ -409,10 +409,13 @@ class Device(CustomConfigHelper):
             obj = await MiotSpec.async_from_type(self.hass, urn, trans_options=trans_options)
             dat[self.model] = obj
         if obj:
-            self.spec = copy.copy(obj)
-            if not self.cloud_only:
-                if ext := self.extend_miot_specs:
-                    self.spec.extend_specs(services=ext)
+            if not self.cloud_only and (ext := self.extend_miot_specs):
+                # Extensions mutate the service/property graph. Never apply them
+                # to an object shared with another entry for the same model.
+                self.spec = MiotSpec(self.hass, obj.raw, obj.spec_translations, obj.trans_options)
+                self.spec.extend_specs(services=ext)
+            else:
+                self.spec = copy.copy(obj)
             self.init_converters()
         return self.spec
 
