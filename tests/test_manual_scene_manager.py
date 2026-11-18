@@ -316,3 +316,70 @@ async def test_stop_event_closes_owned_tasks_and_timer(managers):
     await manager.hass.async_block_till_done()
     assert manager._closed and manager._timer is None
     assert manager._unsub_stop is None
+
+
+async def test_home_reads_have_bounded_parallelism_and_unload_owns_workers(managers):
+    manager, cloud = managers()
+    cloud.async_get_manual_scene_homes.return_value = [
+        {**HOME, 'id': str(number)} for number in range(1, 9)
+    ]
+    entered = asyncio.Event()
+    active = set()
+    maximum = 0
+
+    async def records(home):
+        nonlocal maximum
+        active.add(home['home_id'])
+        maximum = max(maximum, len(active))
+        if len(active) == 3:
+            entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            active.remove(home['home_id'])
+
+    cloud.async_get_manual_scene_home.side_effect = records
+    await manager.async_start()
+    task = manager._task
+    try:
+        async with asyncio.timeout(1):
+            await entered.wait()
+        assert maximum == 3
+        assert cloud.async_get_manual_scene_home.await_count == 3
+    finally:
+        await manager.async_close()
+    assert task.cancelled() and not active
+    assert manager._task is None and manager._timer is None
+    manager._store.async_save.assert_not_awaited()
+
+
+async def test_cancelled_home_read_aborts_snapshot_and_joins_siblings(managers):
+    manager, cloud = managers()
+    cloud.async_get_manual_scene_homes.return_value = [HOME, {**HOME, 'id': '2'}]
+    await manager.async_start()
+    await manager._task
+    original = manager.scenes
+    manager._store.async_save.reset_mock()
+    started = asyncio.Event()
+    stopped = asyncio.Event()
+
+    async def records(home):
+        if home['home_id'] == '1':
+            await started.wait()
+            raise asyncio.CancelledError
+        started.set()
+        try:
+            await asyncio.Future()
+        finally:
+            stopped.set()
+
+    cloud.async_get_manual_scene_home.side_effect = records
+    manager.request_refresh()
+    task = manager._task
+    done, _ = await asyncio.wait({task}, timeout=3)
+    assert task in done
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert stopped.is_set()
+    assert manager.scenes == original
+    manager._store.async_save.assert_not_awaited()
