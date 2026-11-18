@@ -94,6 +94,21 @@ async def test_local_mode_never_uses_cloud(buttons):
     snapshot.run.assert_not_awaited()
 
 
+async def test_auto_never_falls_back_to_another_owners_scene(buttons):
+    button, cloud, backend, snapshot = await buttons()
+
+    async def unavailable(scene):
+        # A refresh replaces this ID while the old request is still pre-dispatch.
+        button.manager._scenes[KEY] = {**scene, 'owner_uid': 'different-owner'}
+        raise GatewayUnavailable('not sent')
+
+    snapshot.run.side_effect = unavailable
+    with pytest.raises(HomeAssistantError) as exc:
+        await button.async_press()
+    assert exc.value.translation_key == 'scene_unavailable'
+    cloud.async_run_manual_scene.assert_not_awaited()
+
+
 async def test_unknown_local_result_never_retries_in_cloud(buttons):
     button, cloud, backend, snapshot = await buttons()
     snapshot.run.side_effect = GatewayResultUnknown('timeout after dispatch')
