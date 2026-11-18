@@ -130,12 +130,15 @@ class GatewayScenes(ManualScenes):
                 return False
             except GatewayUnavailable as exc:
                 scope = scene['owner_uid'], scene['home_id']
-                self._snapshots.pop(scope, None)
+                current = self._snapshots.get(scope)
+                if current and current[1] is snapshot:
+                    self._snapshots.pop(scope)
                 if worker := self._workers.get(scope):
                     worker[1].set()
                 super().notify()
                 if (self.entry.get_config(CONF_CONN_MODE) != 'auto'
-                        or super().route(key) is None):
+                        or super().route(key) is None
+                        or self._scenes[key]['owner_uid'] != scene['owner_uid']):
                     raise scene_error('scene_unavailable') from exc
                 # This exception is guaranteed to precede MQTT publication.
             except GatewayResultUnknown as exc:
