@@ -1445,6 +1445,20 @@ DEVICE_CUSTOMIZES = {
     'lxzn.switch.cbcsmj:voltage': {'value_ratio': 0.1},
     'lxzn.switch.cbcsmj:electric_current': {'value_ratio': 0.001},
 
+    'ykcn.switch.cbcsmj': {
+        'sensor_properties': 'electric_power,fault',
+        'select_properties': 'default_power_on_state',
+        'switch_properties': 'electric_alarm_set,overcurrent_set,overvoltage_set,undervoltage_set',
+        'number_properties': 'electric_alarm,overcurrent_alarm,overvoltage_alarm,undervoltage_alarm',
+        'sensor_attributes': 'power_cost_today,power_cost_month',
+        'stat_power_cost_key': '3.1',
+        'stat_power_cost_template': 'ykcn_switch_cbcsmj_power_cost',
+    },
+    'ykcn.switch.cbcsmj:voltage': {'value_ratio': 0.1},
+    'ykcn.switch.cbcsmj:electric_current': {'value_ratio': 0.001},
+    'ykcn.switch.cbcsmj:power_cost_today': ENERGY_KWH,
+    'ykcn.switch.cbcsmj:power_cost_month': ENERGY_KWH,
+
     'madv.cateye.mi3iot': {
         'binary_sensor_properties': 'madv_doorbell.motion_detection',
         'sensor_properties': 'battery_level',
@@ -1697,6 +1711,9 @@ DEVICE_CUSTOMIZES = {
         'select_properties': 'mode_main,mode_light,mode_sleep,mode_scene',
         'number_properties': 'sleep_duration,music_preview,sleep_volume,sleep_startbri,scene_volume',
         'button_actions': 'brightness_up,brightness_down,cct_up,cct_down,stop_preview',
+    },
+    'philips.light.candle2': {
+        'number_properties': 'delay_off',
     },
     'philips.light.strip3': {
         'switch_properties': 'mitv_rhythm,acousto_optic_rhythm',
@@ -2550,49 +2567,50 @@ DEVICE_CUSTOMIZES = {
     'xiaomi.plug.04': {
         'miot_local': True,
         'auto_cloud': True,
-        # Use MIoT IDs to disambiguate similarly named properties on this model.
+        # Fork display labels follow service/property names, not hardware IIDs.
         'property_translation_keys': {
-            'prop.2.2': 'plug_04_power_on_behavior',
-            'prop.3.1': 'plug_04_indicator_dnd',
-            'prop.3.2': 'plug_04_indicator_dnd_start',
-            'prop.3.3': 'plug_04_indicator_dnd_end',
-            'prop.4.3': 'plug_04_charging_protection_duration',
-            'prop.4.4': 'plug_04_charging_protection_power',
-            'prop.4.5': 'plug_04_charging_protection_start',
-            'prop.4.6': 'plug_04_charging_protection_end',
-            'prop.4.7': 'plug_04_charging_protection_schedule',
-            'prop.4.8': 'plug_04_charging_protection_enable',
-            'prop.5.1': 'plug_04_cycle_task_enable',
-            'prop.8.1': 'plug_04_quick_auto_off_enable',
-            'prop.8.2': 'plug_04_quick_auto_off_duration',
-            'prop.8.4': 'plug_04_delayed_on_enable',
-            'prop.8.5': 'plug_04_delayed_on_duration',
-            'prop.8.6': 'plug_04_delayed_off_enable',
-            'prop.8.7': 'plug_04_delayed_off_duration',
-            'prop.8.8': 'plug_04_delayed_on_remaining',
-            'prop.8.9': 'plug_04_delayed_off_remaining',
-            'prop.9.4': 'plug_04_max_power_threshold',
-            'prop.10.1': 'plug_04_energy_alert_enable',
-            'prop.10.2': 'plug_04_daily_energy_alert_threshold',
-            'prop.10.3': 'plug_04_monthly_energy_alert_threshold',
-            'prop.11.2': 'plug_04_real_time_power',
-            'prop.11.3': 'plug_04_energy_accumulation_mode',
+            'switch.default_power_on_state': 'plug_04_power_on_behavior',
+            'indicator_light.mode': 'plug_04_indicator_dnd',
+            'indicator_light.start_time': 'plug_04_indicator_dnd_start',
+            'indicator_light.end_time': 'plug_04_indicator_dnd_end',
+            'charging_protection.protection_time': 'plug_04_charging_protection_duration',
+            'charging_protection.power_power': 'plug_04_charging_protection_power',
+            'charging_protection.protect_start_time': 'plug_04_charging_protection_start',
+            'charging_protection.protect_end_time': 'plug_04_charging_protection_end',
+            'charging_protection.period': 'plug_04_charging_protection_schedule',
+            'charging_protection.on_off': 'plug_04_charging_protection_enable',
+            'cycle_cycle.status': 'plug_04_cycle_task_enable',
+            'quick_countdown.on_off': 'plug_04_quick_auto_off_enable',
+            'quick_countdown.duration': 'plug_04_quick_auto_off_duration',
+            'quick_countdown.delay_on': 'plug_04_delayed_on_enable',
+            'quick_countdown.delay_on_timer': 'plug_04_delayed_on_duration',
+            'quick_countdown.delay_off': 'plug_04_delayed_off_enable',
+            'quick_countdown.delay_off_timer': 'plug_04_delayed_off_duration',
+            'quick_countdown.delay_on_left_timer': 'plug_04_delayed_on_remaining',
+            'quick_countdown.delay_off_left_timer': 'plug_04_delayed_off_remaining',
+            'max_power_limit.power': 'plug_04_max_power_threshold',
+            'over_use_ele_alert.on_off': 'plug_04_energy_alert_enable',
+            'over_use_ele_alert.over_ele_day': 'plug_04_daily_energy_alert_threshold',
+            'over_use_ele_alert.over_ele_month': 'plug_04_monthly_energy_alert_threshold',
+            'power_consumption.electric_power': 'plug_04_real_time_power',
+            'power_consumption.power_consumption_accumulation_way': 'plug_04_energy_accumulation_mode',
         },
         # Direct 11.1 differs between LAN and cloud; use daily statistics instead.
         'exclude_miot_properties': 'power_consumption',
-        'sensor_properties': 'fault,prop.8.8,prop.8.9',
+        'sensor_properties': 'fault,delay_on_left_timer,delay_off_left_timer',
         'binary_sensor_properties': 'power_consumption_accumulation_way',
-        'switch_properties': 'prop.3.1,prop.4.7,prop.4.8,prop.5.1,prop.8.1,prop.8.4,'
-                             'prop.8.6,prop.10.1',
-        'number_properties': 'prop.3.2,prop.3.3,prop.4.3,prop.4.4,prop.4.5,prop.4.6,'
-                             'prop.8.2,prop.8.5,prop.8.7,prop.9.4,prop.10.2,prop.10.3',
+        'switch_properties': 'mode,period,charging_protection.on_off,delay_on,delay_off,'
+                             'quick_countdown.on_off,over_use_ele_alert.on_off,status',
+        'number_properties': 'start_time,end_time,protection_time,power_power,protect_start_time,'
+                             'protect_end_time,duration,delay_on_timer,delay_off_timer,power,'
+                             'over_ele_day,over_ele_month',
         'select_properties': 'default_power_on_state',
         'sensor_attributes': 'power_cost_today,power_cost_month',
         'stat_power_cost_key': '11.1',
     },
     'xiaomi.plug.04:power_cost_today': {'value_ratio': 1, **ENERGY_KWH},
     'xiaomi.plug.04:power_cost_month': {'value_ratio': 1, **ENERGY_KWH},
-    'xiaomi.plug.04:over_ele_month-10-3': {'unit_of_measurement': 'kWh'},
+    'xiaomi.plug.04:over_ele_month': {'unit_of_measurement': 'kWh'},
     'xiaomi.plug.mcn003': {
         'button_actions': 'toggle',
         'sensor_properties': 'fault,electric_power',
@@ -2820,6 +2838,10 @@ DEVICE_CUSTOMIZES = {
         'switch_properties': 'icing,child_lock,drink_remind,switch_button,buzzer_enable',
         'select_properties': 'mode,rinse_status',
         'number_properties': 'target_temperature',
+    },
+    # https://github.com/al-one/hass-xiaomi-miot/issues/3058
+    'xiaoxun.watch.sw773': {
+        'coord_type': "{{ 'bd09' if data.get('locationinfo.maptype')|int(1) == 0 else 'gcj02' }}",
     },
     'xjx.toilet.relax': {
         'button_actions': 'flush_on',
@@ -3055,6 +3077,9 @@ DEVICE_CUSTOMIZES = {
             {'interval': 61, 'props': 'fault,relative_humidity,pm2_5_density,temperature,air_quality'},
             {'interval': 301, 'props': 'filter_*'},
         ],
+    },
+    'zhimi.airp.vb4': {
+        'select_properties': 'brightness,temperature_display_unit',
     },
     'zhimi.airp.vb4:pm10_density': {
         'unit_of_measurement': 'µg/m³',
